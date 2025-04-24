@@ -1,0 +1,4 @@
+module JMVideoCompressorPackageTests {
+    header "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressorPackageTests.build/JMVideoCompressorPackageTests-Swift.h"
+    requires objc
+}

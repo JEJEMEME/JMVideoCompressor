@@ -1,0 +1,662 @@
+{
+  "builtTestProducts" : [
+    {
+      "binaryPath" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressorPackageTests.xctest/Contents/MacOS/JMVideoCompressorPackageTests",
+      "packagePath" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor",
+      "productName" : "JMVideoCompressorPackageTests"
+    }
+  ],
+  "copyCommands" : {
+    "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressor_JMVideoCompressorTests.bundle/Resources" : {
+      "inputs" : [
+        {
+          "kind" : "directory",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/Tests/JMVideoCompressorTests/Resources"
+        }
+      ],
+      "outputs" : [
+        {
+          "kind" : "directory",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressor_JMVideoCompressorTests.bundle/Resources"
+        }
+      ]
+    }
+  },
+  "explicitTargetDependencyImportCheckingMode" : {
+    "none" : {
+
+    }
+  },
+  "generatedSourceTargetSet" : [
+
+  ],
+  "pluginDescriptions" : [
+
+  ],
+  "swiftCommands" : {
+    "C.JMVideoCompressor-arm64-apple-macosx15.0-debug.module" : {
+      "executable" : "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "fileList" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressor.build/sources",
+      "importPath" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/Sources/JMVideoCompressor/Sources/CompressionConfig.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/Sources/JMVideoCompressor/Sources/JMVideoCompressor.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/Sources/JMVideoCompressor/Sources/JMVideoCompressorError.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/Sources/JMVideoCompressor/Sources/VideoFrameReducer.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/Sources/JMVideoCompressor/Sources/extensions/URL+FileSize.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressor.build/sources"
+        }
+      ],
+      "isLibrary" : true,
+      "moduleName" : "JMVideoCompressor",
+      "moduleOutputPath" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/Modules/JMVideoCompressor.swiftmodule",
+      "objects" : [
+        "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressor.build/CompressionConfig.swift.o",
+        "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressor.build/JMVideoCompressor.swift.o",
+        "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressor.build/JMVideoCompressorError.swift.o",
+        "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressor.build/VideoFrameReducer.swift.o",
+        "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressor.build/URL+FileSize.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "arm64-apple-macosx12.0",
+        "-enable-batch-mode",
+        "-index-store-path",
+        "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-j14",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-module-cache-path",
+        "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/ModuleCache",
+        "-parseable-output",
+        "-parse-as-library",
+        "-emit-objc-header",
+        "-emit-objc-header-path",
+        "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressor.build/JMVideoCompressor-Swift.h",
+        "-color-diagnostics",
+        "-swift-version",
+        "5",
+        "-sdk",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.1.sdk",
+        "-F",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-I",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-L",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-g",
+        "-Xcc",
+        "-isysroot",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.1.sdk",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g"
+      ],
+      "outputFileMapPath" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressor.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressor.build/CompressionConfig.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressor.build/JMVideoCompressor.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressor.build/JMVideoCompressorError.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressor.build/VideoFrameReducer.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressor.build/URL+FileSize.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/Modules/JMVideoCompressor.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/Sources/JMVideoCompressor/Sources/CompressionConfig.swift",
+        "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/Sources/JMVideoCompressor/Sources/JMVideoCompressor.swift",
+        "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/Sources/JMVideoCompressor/Sources/JMVideoCompressorError.swift",
+        "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/Sources/JMVideoCompressor/Sources/VideoFrameReducer.swift",
+        "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/Sources/JMVideoCompressor/Sources/extensions/URL+FileSize.swift"
+      ],
+      "tempsPath" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressor.build",
+      "wholeModuleOptimization" : false
+    },
+    "C.JMVideoCompressorPackageTests-arm64-apple-macosx15.0-debug.module" : {
+      "executable" : "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "fileList" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressorPackageTests.build/sources",
+      "importPath" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressorPackageTests.derived/runner.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/Modules/JMVideoCompressorTests.swiftmodule"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressorPackageTests.build/sources"
+        }
+      ],
+      "isLibrary" : true,
+      "moduleName" : "JMVideoCompressorPackageTests",
+      "moduleOutputPath" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/Modules/JMVideoCompressorPackageTests.swiftmodule",
+      "objects" : [
+        "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressorPackageTests.build/runner.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "arm64-apple-macosx12.0",
+        "-enable-batch-mode",
+        "-index-store-path",
+        "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-j14",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-module-cache-path",
+        "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/ModuleCache",
+        "-parseable-output",
+        "-parse-as-library",
+        "-emit-objc-header",
+        "-emit-objc-header-path",
+        "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressorPackageTests.build/JMVideoCompressorPackageTests-Swift.h",
+        "-color-diagnostics",
+        "-sdk",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.1.sdk",
+        "-F",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-I",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-L",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-g",
+        "-Xcc",
+        "-isysroot",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.1.sdk",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g"
+      ],
+      "outputFileMapPath" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressorPackageTests.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressorPackageTests.build/runner.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/Modules/JMVideoCompressorPackageTests.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressorPackageTests.derived/runner.swift"
+      ],
+      "tempsPath" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressorPackageTests.build",
+      "wholeModuleOptimization" : false
+    },
+    "C.JMVideoCompressorTests-arm64-apple-macosx15.0-debug.module" : {
+      "executable" : "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "fileList" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressorTests.build/sources",
+      "importPath" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/Tests/JMVideoCompressorTests/JMVideoCompressorTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressorTests.build/DerivedSources/resource_bundle_accessor.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+        },
+        {
+          "kind" : "virtual",
+          "name" : "<JMVideoCompressorTests-arm64-apple-macosx15.0-debug.module-resources>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/Modules/JMVideoCompressor.swiftmodule"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressorTests.build/sources"
+        }
+      ],
+      "isLibrary" : true,
+      "moduleName" : "JMVideoCompressorTests",
+      "moduleOutputPath" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/Modules/JMVideoCompressorTests.swiftmodule",
+      "objects" : [
+        "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressorTests.build/JMVideoCompressorTests.swift.o",
+        "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressorTests.build/resource_bundle_accessor.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "arm64-apple-macosx13.0",
+        "-enable-batch-mode",
+        "-index-store-path",
+        "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-j14",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-module-cache-path",
+        "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/ModuleCache",
+        "-parseable-output",
+        "-parse-as-library",
+        "-color-diagnostics",
+        "-swift-version",
+        "5",
+        "-sdk",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.1.sdk",
+        "-F",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-I",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-L",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-g",
+        "-Xcc",
+        "-isysroot",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.1.sdk",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g"
+      ],
+      "outputFileMapPath" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressorTests.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressorTests.build/JMVideoCompressorTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressorTests.build/resource_bundle_accessor.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/Modules/JMVideoCompressorTests.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/Tests/JMVideoCompressorTests/JMVideoCompressorTests.swift",
+        "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressorTests.build/DerivedSources/resource_bundle_accessor.swift"
+      ],
+      "tempsPath" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressorTests.build",
+      "wholeModuleOptimization" : false
+    }
+  },
+  "swiftFrontendCommands" : {
+
+  },
+  "swiftTargetScanArgs" : {
+    "JMVideoCompressor" : [
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "-module-name",
+      "JMVideoCompressor",
+      "-incremental",
+      "-c",
+      "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/Sources/JMVideoCompressor/Sources/CompressionConfig.swift",
+      "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/Sources/JMVideoCompressor/Sources/JMVideoCompressor.swift",
+      "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/Sources/JMVideoCompressor/Sources/JMVideoCompressorError.swift",
+      "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/Sources/JMVideoCompressor/Sources/VideoFrameReducer.swift",
+      "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/Sources/JMVideoCompressor/Sources/extensions/URL+FileSize.swift",
+      "-I",
+      "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/Modules",
+      "-target",
+      "arm64-apple-macosx12.0",
+      "-enable-batch-mode",
+      "-index-store-path",
+      "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-j14",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-module-cache-path",
+      "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/ModuleCache",
+      "-parseable-output",
+      "-parse-as-library",
+      "-emit-objc-header",
+      "-emit-objc-header-path",
+      "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressor.build/JMVideoCompressor-Swift.h",
+      "-color-diagnostics",
+      "-swift-version",
+      "5",
+      "-sdk",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.1.sdk",
+      "-F",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-I",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-L",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-g",
+      "-Xcc",
+      "-isysroot",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.1.sdk",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-driver-use-frontend-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+    ],
+    "JMVideoCompressorPackageTests" : [
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "-module-name",
+      "JMVideoCompressorPackageTests",
+      "-incremental",
+      "-c",
+      "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressorPackageTests.derived/runner.swift",
+      "-I",
+      "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/Modules",
+      "-target",
+      "arm64-apple-macosx12.0",
+      "-enable-batch-mode",
+      "-index-store-path",
+      "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-j14",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-module-cache-path",
+      "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/ModuleCache",
+      "-parseable-output",
+      "-parse-as-library",
+      "-emit-objc-header",
+      "-emit-objc-header-path",
+      "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressorPackageTests.build/JMVideoCompressorPackageTests-Swift.h",
+      "-color-diagnostics",
+      "-sdk",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.1.sdk",
+      "-F",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-I",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-L",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-g",
+      "-Xcc",
+      "-isysroot",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.1.sdk",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-driver-use-frontend-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+    ],
+    "JMVideoCompressorTests" : [
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "-module-name",
+      "JMVideoCompressorTests",
+      "-incremental",
+      "-c",
+      "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/Tests/JMVideoCompressorTests/JMVideoCompressorTests.swift",
+      "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressorTests.build/DerivedSources/resource_bundle_accessor.swift",
+      "-I",
+      "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/Modules",
+      "-target",
+      "arm64-apple-macosx13.0",
+      "-enable-batch-mode",
+      "-index-store-path",
+      "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-j14",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-module-cache-path",
+      "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/ModuleCache",
+      "-parseable-output",
+      "-parse-as-library",
+      "-color-diagnostics",
+      "-swift-version",
+      "5",
+      "-sdk",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.1.sdk",
+      "-F",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-I",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-L",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-g",
+      "-Xcc",
+      "-isysroot",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.1.sdk",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-driver-use-frontend-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+    ]
+  },
+  "targetDependencyMap" : {
+    "JMVideoCompressor" : [
+
+    ],
+    "JMVideoCompressorPackageTests" : [
+      "JMVideoCompressorTests",
+      "JMVideoCompressor"
+    ],
+    "JMVideoCompressorTests" : [
+      "JMVideoCompressor"
+    ]
+  },
+  "testDiscoveryCommands" : {
+
+  },
+  "testEntryPointCommands" : {
+    "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressorPackageTests.derived/runner.swift" : {
+      "inputs" : [
+
+      ],
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressorPackageTests.derived/runner.swift"
+        }
+      ]
+    }
+  },
+  "writeCommands" : {
+    "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressor.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/Sources/JMVideoCompressor/Sources/CompressionConfig.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/Sources/JMVideoCompressor/Sources/JMVideoCompressor.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/Sources/JMVideoCompressor/Sources/JMVideoCompressorError.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/Sources/JMVideoCompressor/Sources/VideoFrameReducer.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/Sources/JMVideoCompressor/Sources/extensions/URL+FileSize.swift"
+        }
+      ],
+      "outputFilePath" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressor.build/sources"
+    },
+    "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressorPackageTests.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressorPackageTests.derived/runner.swift"
+        }
+      ],
+      "outputFilePath" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressorPackageTests.build/sources"
+    },
+    "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressorPackageTests.product/Objects.LinkFileList" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<link-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressor.build/CompressionConfig.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressor.build/JMVideoCompressor.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressor.build/JMVideoCompressorError.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressor.build/URL+FileSize.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressor.build/VideoFrameReducer.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressorPackageTests.build/runner.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressorTests.build/JMVideoCompressorTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressorTests.build/resource_bundle_accessor.swift.o"
+        }
+      ],
+      "outputFilePath" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressorPackageTests.product/Objects.LinkFileList"
+    },
+    "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressorTests.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/Tests/JMVideoCompressorTests/JMVideoCompressorTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressorTests.build/DerivedSources/resource_bundle_accessor.swift"
+        }
+      ],
+      "outputFilePath" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/JMVideoCompressorTests.build/sources"
+    },
+    "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt" : {
+      "alwaysOutOfDate" : true,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<swift-get-version>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+        }
+      ],
+      "outputFilePath" : "/Users/raykim/Documents/source/ios/opensource/JMVideoCompressor/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+    }
+  }
+}

@@ -1,0 +1,163 @@
+# JMVideoCompressor
+
+[![Swift Package Manager](https://img.shields.io/badge/Swift%20Package%20Manager-compatible-brightgreen.svg)](https://swift.org/package-manager/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+A Swift library designed for efficient video compression on iOS and macOS using AVFoundation. It offers both simple presets and granular custom configurations.
+
+## Features
+
+* **Easy Presets:** Compress videos using predefined quality settings (`.lowQuality`, `.mediumQuality`, `.highQuality`, `.socialMedia`, `.messaging`).
+* **Custom Configuration:** Fine-tune compression with `CompressionConfig`, controlling codecs (H.264, HEVC), bitrate/quality, resolution scaling, frame rate, audio settings, and more.
+* **Codec Support:** Compress using H.264 or HEVC (H.265), with checks for HEVC hardware support.
+* **Frame Rate Reduction:** Reduce video frame rate using different strategies (e.g., evenly spaced, random selection).
+* **Asynchronous API:** Modern `async/await` syntax for non-blocking compression tasks.
+* **Progress Reporting:** Monitor compression progress via a closure.
+* **Cancellation:** Support for cancelling ongoing compression operations.
+* **Detailed Analytics:** Get insights into the compression results, including file sizes, compression ratio, processing time, dimensions, and bitrates.
+* **Output Control:** Specify a target output directory or a precise output file URL.
+
+## Requirements
+
+* iOS 16.0+
+* macOS 12.0+
+* Xcode 14.0+ (or a version compatible with Swift 5.7+)
+* Swift 5.7+
+
+## Installation
+
+You can add `JMVideoCompressor` to your project using the Swift Package Manager.
+
+**Using Xcode:**
+
+1.  Go to **File** > **Swift Packages** > **Add Package Dependency...**
+2.  Enter the repository URL: `https://github.com/JEJEMEME/JMVideoCompressor.git`
+3.  Choose the version rules (e.g., "Up to Next Major" starting from `1.0.0`).
+4.  Select the `JMVideoCompressor` library for your target.
+
+**Using `Package.swift`:**
+
+Add the following dependency to your `Package.swift` file:
+
+```swift
+// swift-tools-version:5.7
+import PackageDescription
+
+let package = Package(
+    // ... other package configurations
+    dependencies: [
+        .package(url: "[https://github.com/JEJEMEME/JMVideoCompressor.git](https://github.com/JEJEMEME/JMVideoCompressor.git)", from: "1.0.0") // Replace "1.0.0" with the desired version
+    ],
+    targets: [
+        .target(
+            name: "YourTargetName",
+            dependencies: ["JMVideoCompressor"]
+            // ... other target configurations
+        ),
+        // ... other targets
+    ]
+)
+Then, import the module in your Swift files:import JMVideoCompressorUsageHere's how to use JMVideoCompressor:1. Import the Libraryimport JMVideoCompressor
+import AVFoundation // Often needed for URLs
+2. Initialize the Compressorlet compressor = JMVideoCompressor()
+let sourceVideoURL = URL(fileURLWithPath: "/path/to/your/input/video.mp4") // Replace with your video URL
+3. Basic Compression using PresetsUse predefined VideoQuality presets for quick compression. The output file will be placed in a temporary directory by default, or you can specify an outputDirectory.do {
+    // Define where the compressed file should go (optional, defaults to temp dir)
+    let outputDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("CompressedVideos")
+    try? FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
+
+    print("Starting compression with medium quality preset...")
+
+    // Compress with progress reporting
+    let result = try await compressor.compressVideo(
+        sourceVideoURL,
+        quality: .mediumQuality, // Choose from .lowQuality, .mediumQuality, .highQuality, .socialMedia, .messaging
+        outputDirectory: outputDirectory, // Specify output location
+        progressHandler: { progress in
+            // Update UI or log progress (runs on a background thread)
+            DispatchQueue.main.async {
+                 print("Compression Progress: \(String(format: "%.0f%%", progress * 100))")
+            }
+        }
+    )
+
+    print("Compression successful!")
+    print("Output URL: \(result.url.path)")
+    print("Original Size: \(String(format: "%.2f MB", Double(result.analytics.originalFileSize) / (1024*1024)))")
+    print("Compressed Size: \(String(format: "%.2f MB", Double(result.analytics.compressedFileSize) / (1024*1024)))")
+    print("Ratio: \(String(format: "%.2f : 1", result.analytics.compressionRatio))")
+    print("Time: \(String(format: "%.2f s", result.analytics.processingTime))")
+
+} catch let error as JMVideoCompressorError {
+    print("Compression failed with error: \(error.localizedDescription)")
+    // Handle specific JMVideoCompressorError cases if needed
+} catch {
+    print("An unexpected error occurred: \(error.localizedDescription)")
+}
+4. Compression with Custom ConfigurationFor more control, use CompressionConfig. Set the output path within the config object (outputURL for a specific file or outputDirectory for a directory).do {
+    var customConfig = CompressionConfig.default // Start with default settings
+
+    // --- Video Settings ---
+    customConfig.videoCodec = .hevc // Use HEVC if supported
+    customConfig.useExplicitBitrate = true // Use bitrate instead of quality factor
+    customConfig.videoBitrate = 1_500_000 // 1.5 Mbps
+    customConfig.scale = CGSize(width: 1280, height: -1) // Scale width to 1280p, maintain aspect ratio (height: -1)
+    customConfig.fps = 24 // Target 24 FPS (will use frame reduction if source > 24)
+
+    // --- Audio Settings ---
+    customConfig.audioCodec = .aac_he_v1 // High-Efficiency AAC
+    customConfig.audioBitrate = 64_000 // 64 kbps
+    customConfig.audioChannels = 1 // Mono audio
+
+    // --- Output Settings ---
+    let customOutputURL = FileManager.default.temporaryDirectory.appendingPathComponent("custom_compressed_\(UUID().uuidString).mp4")
+    customConfig.outputURL = customOutputURL // Specify the exact output file URL
+    // Note: If outputURL is set, outputDirectory is ignored.
+
+    print("Starting compression with custom configuration...")
+    let result = try await compressor.compressVideo(
+        sourceVideoURL,
+        config: customConfig,
+        // Optional: Provide a frame reducer strategy
+        // frameReducer: ReduceFrameRandomly(),
+        progressHandler: { progress in
+            DispatchQueue.main.async {
+                print("Custom Compression Progress: \(String(format: "%.0f%%", progress * 100))")
+            }
+        }
+    )
+
+    print("Custom compression successful!")
+    print("Output URL: \(result.url.path)")
+    // Access analytics as in the previous example...
+    print("Analytics: \(result.analytics)")
+
+} catch JMVideoCompressorError.codecNotSupported(let codec) {
+     print("Error: The selected codec (\(codec)) is not supported on this device.")
+} catch let error as JMVideoCompressorError {
+     print("Compression failed with error: \(error.localizedDescription)")
+} catch {
+     print("An unexpected error occurred: \(error.localizedDescription)")
+}
+5. Cancelling CompressionYou can cancel an ongoing compression task by calling the cancel() method on the JMVideoCompressor instance. This is typically done from a different task or thread (e.g., user tapping a cancel button).// Somewhere in your code where compression is running:
+let compressionTask = Task {
+    do {
+        let result = try await compressor.compressVideo(sourceVideoURL, quality: .mediumQuality)
+        // Handle success...
+    } catch JMVideoCompressorError.cancelled {
+        print("Compression was cancelled by the user.")
+    } catch {
+        // Handle other errors...
+    }
+}
+
+// Elsewhere (e.g., button action):
+func userTappedCancelButton() {
+    compressor.cancel() // Request cancellation
+    // Optionally: compressionTask.cancel() // If you need to cancel the Swift Task itself
+}
+Configuration (CompressionConfig)The CompressionConfig struct provides detailed control over the compression process:Video Settings:videoCodec: VideoCodec (.h264 or .hevc). Use codec.isSupported() to check for HEVC hardware encoding availability.useExplicitBitrate: Bool. If true, uses videoBitrate. If false, uses videoQuality. Default is true.videoBitrate: Int. Target average video bitrate in bits per second (e.g., 2_000_000 for 2 Mbps). Effective only if useExplicitBitrate is true. The compressor might adjust this down if it significantly exceeds the source bitrate.videoQuality: Float. Target quality between 0.0 (lowest) and 1.0 (highest). Effective only if useExplicitBitrate is false. This is a hint to the encoder; the resulting bitrate varies.maxKeyFrameInterval: Int. Maximum interval between keyframes (e.g., 30). Lower values can improve seeking but may increase file size.fps: Float. Target frame rate (e.g., 30). If lower than the source FPS, a VideoFrameReducer strategy is used.scale: CGSize?. Target dimensions.nil: Keep original dimensions.CGSize(width: W, height: H): Specific target width and height.CGSize(width: W, height: -1): Set target width W, calculate height to maintain aspect ratio.CGSize(width: -1, height: H): Set target height H, calculate width to maintain aspect ratio.Dimensions are rounded down to the nearest even number.Audio Settings:audioCodec: AudioCodecType (.aac, .aac_he_v1, .aac_he_v2).audioBitrate: Int. Target audio bitrate in bits per second (e.g., 128_000 for 128 kbps).audioSampleRate: Int. Target audio sample rate in Hz (e.g., 44100).audioChannels: Int?. Target number of audio channels (e.g., 1 for mono, 2 for stereo). If nil, uses the source number of channels (up to 2).Optimization Settings:contentAwareOptimization: Bool. If true (default), analyzes content (motion, screencast) to potentially adjust maxKeyFrameInterval and quality/bitrate settings slightly.preprocessing: PreprocessingOptions. Contains placeholders for future features like noise reduction (noiseReduction) and auto levels (autoLevels). Currently has minimal effect.Output Settings:fileType: AVFileType. Container format for the output file (e.g., .mp4, .mov). Default is .mp4.outputURL: URL?. If set, specifies the exact path and filename for the output video. Overrides outputDirectory. The parent directory will be created if it doesn't exist.outputDirectory: URL?. If outputURL is nil, this specifies the directory where the compressed file (with a unique name) will be saved. If both outputURL and outputDirectory are nil, the system's temporary directory is used.Frame Rate Reduction (VideoFrameReducer)When the target fps in CompressionConfig is lower than the source video's frame rate, a VideoFrameReducer strategy determines which frames to keep. You can pass an instance of a type conforming to this protocol to the compressVideo method.ReduceFrameEvenlySpaced (Default): Selects frames that are closest to evenly spaced time intervals corresponding to the target frame rate. Ensures the first frame is always kept.ReduceFrameRandomly: Divides the video into segments based on the target frame rate and randomly picks one frame from each segment.SceneAwareReducer: (Placeholder) Intended for future implementation to detect scene changes and prioritize keeping frames around cuts. Currently falls back to ReduceFrameEvenlySpaced.Example:let result = try await compressor.compressVideo(
+    sourceVideoURL,
+    config: myLowFPSConfig, // A config with config.fps = 15
+    frameReducer: ReduceFrameRandomly() // Use the random reducer
+)
+Error Handling (JMVideoCompressorError)The compressVideo methods can throw errors defined in the JMVideoCompressorError enum:.invalidSourceURL(URL): The provided source URL is invalid or the file doesn't exist..invalidOutputPath(URL): The specified outputDirectory or the parent directory of outputURL is invalid or cannot be created..missingVideoTrack: The source asset does not contain any video tracks..readerInitializationFailed(Error?): Failed to create the AVAssetReader..writerInitializationFailed(Error?): Failed to create the AVAssetWriter..compressionFailed(Error): An error occurred during the sample writing process..cancelled: The operation was cancelled via the cancel() method..codecNotSupported(VideoCodec): The chosen videoCodec (especially HEVC) is not supported by the hardware/OS..underlyingError(Error): Wraps another system-level error encountered during processing.Use a do-catch block to handle these errors gracefully.Compression Analytics (CompressionAnalytics)The successful result of compressVideo includes a CompressionAnalytics struct containing:originalFileSize: Int64 - Size of the source file in bytes.compressedFileSize: Int64 - Size of the output file in bytes.compressionRatio: Float - originalFileSize / compressedFileSize. Higher is better.processingTime: TimeInterval - Time taken for compression in seconds.originalDimensions: CGSize - Width and height of the original video.compressedDimensions: CGSize - Width and height of the compressed video.originalVideoBitrate: Float - Estimated bitrate of the source video track (bps).compressedVideoBitrate: Float - Target or estimated bitrate of the compressed video track (bps).originalAudioBitrate: Float? - Estimated bitrate of the source audio track (bps), if present.compressedAudioBitrate: Float? - Target or estimated bitrate of the compressed audio track (bps), if present.TestingThe package includes a suite of unit tests in the JMVideoCompressorTests target.Sample Video: Tests require a sample.mp4 video file located in the Tests/JMVideoCompressorTests/Resources/ directory. This resource is automatically copied for the test target as defined in Package.swift.Running Tests:Xcode: Open the package in Xcode, select a simulator or device, and press Cmd+U (Product > Test).Command Line: Navigate to the package's root directory in Terminal and run swift test.The tests cover:Compression with different quality presets.Compression with various custom configurations (codecs, bitrate, scaling, FPS, audio settings).Usage of frame reducers.Specifying output paths.Error handling scenarios (invalid input/output, unsupported codecs).AcknowledgementsThis project was inspired by and references concepts from T2Je/FYVideoCompressor.ContributingContributions are welcome! Please feel free to submit issues or pull requests
