@@ -210,12 +210,12 @@ public class JMVideoCompressor {
         }
 
         // --- Configure Reader Outputs ---
-        // Revert to 8-bit YUV pixel format (like FYVideoCompressor) to test interaction with Auto HDR mode
+        // *** CRITICAL FOR HDR: Use a 10-bit pixel format to preserve HDR data during reading ***
         let videoOutputSettings: [String: Any] = [
-            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange
         ]
         let videoOutput = AVAssetReaderTrackOutput(track: sourceVideoTrack, outputSettings: videoOutputSettings)
-        videoOutput.alwaysCopiesSampleData = false // Keep false for performance unless modification is needed
+        videoOutput.alwaysCopiesSampleData = false
         guard localReader.canAdd(videoOutput) else {
             throw JMVideoCompressorError.compressionFailed(NSError(domain: "JMVideoCompressor", code: -2, userInfo: [NSLocalizedDescriptionKey: "Cannot add video reader output."]))
         }
