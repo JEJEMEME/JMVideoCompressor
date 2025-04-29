@@ -210,9 +210,12 @@ public class JMVideoCompressor {
         }
 
         // --- Configure Reader Outputs ---
-        let videoOutputSettings: [String: Any] = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
+        let videoOutputSettings: [String: Any] = [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange
+            // Consider kCVPixelFormatType_420YpCbCr10BiPlanarFullRange if needed, but VideoRange is more common for video.
+        ]
         let videoOutput = AVAssetReaderTrackOutput(track: sourceVideoTrack, outputSettings: videoOutputSettings)
-        videoOutput.alwaysCopiesSampleData = false
+        videoOutput.alwaysCopiesSampleData = false // Keep false for performance unless modification is needed
         guard localReader.canAdd(videoOutput) else {
             throw JMVideoCompressorError.compressionFailed(NSError(domain: "JMVideoCompressor", code: -2, userInfo: [NSLocalizedDescriptionKey: "Cannot add video reader output."]))
         }
