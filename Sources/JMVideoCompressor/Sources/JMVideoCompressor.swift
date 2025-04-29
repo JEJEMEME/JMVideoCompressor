@@ -339,29 +339,6 @@ public class JMVideoCompressor {
 
     // MARK: - Private Processing Logic
 
-    // Actor to manage state safely during concurrent track processing
-    private actor TrackProcessorState {
-        var frameCounter: Int = 0
-        var keepFrameIndicesIterator: IndexingIterator<[Int]>?
-        var nextIndexToKeep: Int?
-        var lastProgressUpdate: Float = -1.0
-
-        init(frameIndexesToKeep: [Int]?) {
-            self.keepFrameIndicesIterator = frameIndexesToKeep?.makeIterator()
-            self.nextIndexToKeep = self.keepFrameIndicesIterator?.next()
-        }
-
-        func incrementFrameCounter() { frameCounter += 1 }
-        func getNextIndexToKeep() -> Int? { nextIndexToKeep }
-        func advanceIterator() { nextIndexToKeep = keepFrameIndicesIterator?.next() }
-        func updateProgress(_ progress: Float) { lastProgressUpdate = progress }
-        func shouldUpdateProgress(_ progress: Float) -> Bool {
-            return progress >= lastProgressUpdate + 0.01 || progress >= 1.0
-        }
-        func getLastProgress() -> Float { lastProgressUpdate }
-    }
-
-
     /// Processes samples for a single track (video or audio).
     /// Throws an error if appending samples fails.
     private func processTrack(
@@ -371,14 +348,20 @@ public class JMVideoCompressor {
         progressHandler: ((Float) -> Void)?
     ) async throws { // Marked as throwing
         // Create a state manager actor instance for this specific track processing task
-        let state = TrackProcessorState(frameIndexesToKeep: frameIndexesToKeep)
+        // Removed actor state as direct processing on isolation queue is simpler
+        // let state = TrackProcessorState(frameIndexesToKeep: frameIndexesToKeep)
+        var frameCounter: Int = 0
+        var keepFrameIndicesIterator = frameIndexesToKeep?.makeIterator()
+        var nextIndexToKeep: Int? = keepFrameIndicesIterator?.next()
+        var lastProgressUpdate: Float = -1.0 // Track last progress update
 
         // Use a continuation to bridge the callback-based API with async/await
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) -> Void in
             var didResume = false // Flag to prevent double resumption
 
             // Function to safely resume the continuation exactly once
-            func safeResume(throwing error: Error? = nil) {
+            // Marked @Sendable as it's called from a concurrent queue's closure
+            @Sendable func safeResume(throwing error: Error? = nil) {
                 if !didResume {
                     didResume = true
                     if let error = error {
@@ -396,44 +379,31 @@ public class JMVideoCompressor {
                     return
                 }
 
-                // --- Start Processing Logic ---
-                // Check for cancellation first
-                guard !self.cancelled else {
-                    assetWriterInput.markAsFinished()
-                    safeResume(throwing: JMVideoCompressorError.cancelled) // Resume with cancellation error
-                    return
-                }
+                // --- Start Processing Logic (Simplified: Directly on isolationQueue) ---
+                while assetWriterInput.isReadyForMoreMediaData && !self.cancelled {
+                    // Check for cancellation first inside the loop
+                    if self.cancelled {
+                        assetWriterInput.markAsFinished()
+                        safeResume(throwing: JMVideoCompressorError.cancelled)
+                        return // Exit loop and closure
+                    }
 
-                // Check if input is actually ready (it should be, as this closure is called)
-                guard assetWriterInput.isReadyForMoreMediaData else {
-                    // This case should theoretically not happen if the closure is called correctly,
-                    // but handle it defensively.
-                    print("Warning: requestMediaDataWhenReady called but input not ready.")
-                    // Don't resume here, wait for the next callback or timeout?
-                    // Or potentially resume with an error? For now, just return.
-                    // safeResume(throwing: ...) // Consider adding an error if this path is problematic
-                    return
-                }
-
-                // Read the next sample buffer
-                if let sampleBuffer = readerOutput.copyNextSampleBuffer() {
-                    // Process this single buffer asynchronously to interact with the actor
-                    Task {
+                    // Read the next sample buffer
+                    if let sampleBuffer = readerOutput.copyNextSampleBuffer() {
                         var shouldAppend = true
-                        let currentFrame = await state.frameCounter // Read from actor
 
                         // --- Frame Reduction Logic ---
                         if frameIndexesToKeep != nil {
-                            if let targetIndex = await state.getNextIndexToKeep() {
-                                if currentFrame == targetIndex {
-                                    await state.advanceIterator()
+                            if let targetIndex = nextIndexToKeep {
+                                if frameCounter == targetIndex {
+                                    nextIndexToKeep = keepFrameIndicesIterator?.next() // Advance iterator
                                 } else {
                                     shouldAppend = false
                                 }
                             } else {
-                                shouldAppend = false
+                                shouldAppend = false // No more indices to keep
                             }
-                            await state.incrementFrameCounter()
+                            frameCounter += 1
                         }
                         // --- End Frame Reduction ---
 
@@ -443,48 +413,43 @@ public class JMVideoCompressor {
                                 let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
                                 if pts.isValid {
                                     let progress = Float(pts.seconds / self.totalSourceTime.seconds)
-                                    if await state.shouldUpdateProgress(progress) {
-                                        handler(min(max(progress, 0.0), 1.0))
-                                        await state.updateProgress(progress)
+                                    // Update progress if changed significantly or final
+                                    if progress >= lastProgressUpdate + 0.01 || progress >= 1.0 {
+                                        // Call handler on main thread for UI updates
+                                        DispatchQueue.main.async {
+                                            handler(min(max(progress, 0.0), 1.0))
+                                        }
+                                        lastProgressUpdate = progress
                                     }
                                 }
                             }
                             // --- End Progress ---
 
-                            // --- Append Buffer ---
-                            // *** CRITICAL: Check isReadyForMoreMediaData AGAIN before appending ***
-                            // This check must happen on the isolationQueue where the input's state is managed.
-                            self.isolationQueue.async {
-                                if assetWriterInput.isReadyForMoreMediaData {
-                                    if !assetWriterInput.append(sampleBuffer) {
-                                        let writerError = self.assetWriter?.error // Get writer error safely
-                                        print("Error: Failed to append \(assetWriterInput.mediaType) buffer. Writer status: \(self.assetWriter?.status.rawValue ?? -1). Error: \(writerError?.localizedDescription ?? "unknown")")
-                                        safeResume(throwing: JMVideoCompressorError.compressionFailed(writerError ?? NSError(domain: "JMVideoCompressor", code: -6, userInfo: [NSLocalizedDescriptionKey: "Failed to append sample buffer."])))
-                                    }
-                                    // If append succeeded, DO NOT resume here. Wait for the next requestMediaDataWhenReady call.
-                                } else {
-                                    // Input became not ready between check and append attempt.
-                                    // This indicates a potential logic issue or timing problem.
-                                    // Don't append, wait for the next callback.
-                                    print("Warning: Input became not ready before append attempt for \(assetWriterInput.mediaType).")
-                                    // safeResume() // Don't resume, wait for next callback
-                                }
+                            // --- Append Buffer --- (Already on isolationQueue)
+                            if !assetWriterInput.append(sampleBuffer) {
+                                let writerError = self.assetWriter?.error // Get writer error safely
+                                print("Error: Failed to append \(assetWriterInput.mediaType) buffer. Writer status: \(self.assetWriter?.status.rawValue ?? -1). Error: \(writerError?.localizedDescription ?? "unknown")")
+                                safeResume(throwing: JMVideoCompressorError.compressionFailed(writerError ?? NSError(domain: "JMVideoCompressor", code: -6, userInfo: [NSLocalizedDescriptionKey: "Failed to append sample buffer."])))
+                                return // Exit loop and closure on error
                             }
-                            // --- End Append ---
+                            // If append succeeded, loop continues
+                        } // End if shouldAppend
+                    } else {
+                        // No more sample buffers available
+                        assetWriterInput.markAsFinished()
+                        // Send final progress update if needed
+                        if let handler = progressHandler, lastProgressUpdate < 1.0 {
+                             DispatchQueue.main.async {
+                                handler(1.0)
+                             }
                         }
-                        // If !shouldAppend, buffer is dropped. Don't resume.
-                    } // End Task for actor interaction
-                } else {
-                    // No more sample buffers available
-                    assetWriterInput.markAsFinished()
-                    // Send final progress update if needed
-                    Task { // Perform actor access asynchronously
-                         let lastProgress = await state.getLastProgress()
-                         if let handler = progressHandler, lastProgress < 1.0 { handler(1.0) }
-                         safeResume() // Resume after marking finished
+                        safeResume() // Resume after marking finished
+                        return // Exit loop and closure
                     }
-                }
-                // --- End Processing Logic ---
+                } // End while loop
+
+                // If loop finished because input is not ready or cancelled (already handled),
+                // the callback will be invoked again when ready, or the continuation was resumed.
             } // End requestMediaDataWhenReady closure
         } // End withCheckedThrowingContinuation
     }
@@ -544,6 +509,10 @@ public class JMVideoCompressor {
         let fps: Float
         let bitrate: Float
         let transform: CGAffineTransform
+        // HDR Metadata
+        let colorPrimaries: String? // e.g., "ITU_R_2020"
+        let transferFunction: String? // e.g., "ITU_R_2100_PQ" or "ITU_R_2100_HLG"
+        let yCbCrMatrix: String? // e.g., "ITU_R_2020"
     }
 
     private func loadSourceVideoSettings(track: AVAssetTrack) async throws -> SourceVideoSettings {
@@ -551,7 +520,29 @@ public class JMVideoCompressor {
         async let fps = track.load(.nominalFrameRate)
         async let bitrate = track.load(.estimatedDataRate)
         async let transform = track.load(.preferredTransform)
-        return try await SourceVideoSettings(size: size, fps: fps, bitrate: bitrate, transform: transform)
+        async let formatDescriptions = track.load(.formatDescriptions)
+
+        // Default SDR values
+        var colorPrimaries: String? = kCMFormatDescriptionColorPrimaries_SMPTE_C as String // Or ITU_R_709_2? Check common SDR
+        var transferFunction: String? = kCMFormatDescriptionTransferFunction_ITU_R_709_2 as String
+        var yCbCrMatrix: String? = kCMFormatDescriptionYCbCrMatrix_ITU_R_709_2 as String
+
+        // Attempt to read HDR metadata from format descriptions
+        if let formatDesc = try await formatDescriptions.first {
+            func getStringValue(for key: CFString) -> String? {
+                CMFormatDescriptionGetExtension(formatDesc, extensionKey: key) as? String
+            }
+            colorPrimaries = getStringValue(for: kCMFormatDescriptionExtension_ColorPrimaries) ?? colorPrimaries
+            transferFunction = getStringValue(for: kCMFormatDescriptionExtension_TransferFunction) ?? transferFunction
+            yCbCrMatrix = getStringValue(for: kCMFormatDescriptionExtension_YCbCrMatrix) ?? yCbCrMatrix
+        } else {
+            print("Warning: Could not read source video format description.")
+        }
+
+        return try await SourceVideoSettings(
+            size: size, fps: fps, bitrate: bitrate, transform: transform,
+            colorPrimaries: colorPrimaries, transferFunction: transferFunction, yCbCrMatrix: yCbCrMatrix
+        )
     }
 
     /// Internal helper struct for source audio properties.
@@ -574,55 +565,92 @@ public class JMVideoCompressor {
         return try await SourceAudioSettings(bitrate: bitrate, sampleRate: sampleRate, channels: channels, formatID: formatID)
     }
 
-    /// Creates the video output settings dictionary.
+    /// Creates the video output settings dictionary. Handles SDR and HDR based on source metadata.
     private func createTargetVideoSettings(config: CompressionConfig, source: SourceVideoSettings) throws -> [String: Any] {
-        // Calculate the target output size based on config scale and source dimensions/transform
         let targetSize = calculateTargetSize(scale: config.scale, originalSize: source.size, sourceTransform: source.transform)
 
-        // Base compression properties
         var compressionProperties: [String: Any] = [
-            // Set the video profile level based on codec (HEVC or H.264)
-            AVVideoProfileLevelKey: (config.videoCodec == .hevc) ? (kVTProfileLevel_HEVC_Main_AutoLevel as String) : AVVideoProfileLevelH264HighAutoLevel,
-            // Set the maximum interval between keyframes
             AVVideoMaxKeyFrameIntervalKey: config.maxKeyFrameInterval,
-            // Disable frame reordering for better compatibility/predictability
-            AVVideoAllowFrameReorderingKey: false
-            // REMOVED: kVTCompressionPropertyKey_PreserveTransferFunctionAndColorPrimaries - Not a valid key here
+            AVVideoAllowFrameReorderingKey: false,
         ]
 
-        // Add codec-specific properties
-        if config.videoCodec == .h264 {
-            // Use CABAC entropy mode for H.264 for better compression efficiency
-            compressionProperties[AVVideoH264EntropyModeKey] = AVVideoH264EntropyModeCABAC
-        } else if config.videoCodec == .hevc {
-            // --- Add HDR Metadata Insertion for HEVC (iOS 16+/macOS 13+) ---
-             if #available(iOS 16.0, macOS 13.0, *) {
-                 // Automatically insert HDR metadata if present in the source
-                 compressionProperties[kVTCompressionPropertyKey_HDRMetadataInsertionMode as String] = kVTHDRMetadataInsertionMode_Auto
-             }
-             // --- End HDR Setting ---
+        // --- Determine HDR status ---
+        let isHDR: Bool
+        // Compare against known string values instead of potentially unavailable constants
+        if source.colorPrimaries == (kCMFormatDescriptionColorPrimaries_ITU_R_2020 as String) ||
+           source.transferFunction == "ITU_R_2100_PQ" ||
+           source.transferFunction == "ITU_R_2100_HLG" {
+            isHDR = true
+        } else {
+            isHDR = false
         }
 
-        // Set bitrate or quality based on config
+        let targetCodec = config.videoCodec
+        var profileLevel: String? = nil
+
+        // --- Set Profile Level and HDR Metadata --- 
+        if isHDR {
+            if targetCodec == .hevc {
+                // Use HEVC Main10 AutoLevel for 10-bit HDR
+                profileLevel = kVTProfileLevel_HEVC_Main10_AutoLevel as String
+
+                // Add HDR metadata to compression properties
+                if let primaries = source.colorPrimaries {
+                    compressionProperties[kVTCompressionPropertyKey_ColorPrimaries as String] = primaries
+                }
+                if let transfer = source.transferFunction {
+                    compressionProperties[kVTCompressionPropertyKey_TransferFunction as String] = transfer
+                }
+                if let matrix = source.yCbCrMatrix {
+                    compressionProperties[kVTCompressionPropertyKey_YCbCrMatrix as String] = matrix
+                }
+                print("Info: HDR detected and HEVC Main10 profile selected. Applying HDR metadata.")
+            } else {
+                 // HDR detected but codec is not HEVC
+                 print("Warning: HDR metadata detected, but video codec is not HEVC. HDR information might be lost. Consider using .hevc codec.")
+                 // Set profile for the non-HEVC codec (e.g., H.264)
+                 if targetCodec == .h264 {
+                     profileLevel = AVVideoProfileLevelH264HighAutoLevel
+                     compressionProperties[AVVideoH264EntropyModeKey] = AVVideoH264EntropyModeCABAC
+                 } else {
+                     // Handle other potential codecs if added later
+                     print("Warning: Unsupported codec for HDR passthrough: \(targetCodec)")
+                 }
+                 // Do not add HDR metadata properties for non-HEVC codecs
+            }
+        } else {
+            // Standard SDR configuration
+            if targetCodec == .hevc {
+                profileLevel = kVTProfileLevel_HEVC_Main_AutoLevel as String
+            } else if targetCodec == .h264 {
+                profileLevel = AVVideoProfileLevelH264HighAutoLevel
+                compressionProperties[AVVideoH264EntropyModeKey] = AVVideoH264EntropyModeCABAC
+            }
+            // Handle other codecs if needed
+        }
+
+        // Apply the determined profile level
+        if let level = profileLevel {
+            compressionProperties[AVVideoProfileLevelKey] = level
+        }
+
+        // --- Bitrate/Quality Settings (Same as before) ---
         if config.useExplicitBitrate {
-            let minBitrate: Float = 50_000 // Minimum allowed bitrate
+            let minBitrate: Float = 50_000
             var effectiveBitrate = Float(config.videoBitrate)
-            // Adjust bitrate if target is significantly higher than source (avoid unnecessary upscaling)
-            // or lower than minimum
             if effectiveBitrate > source.bitrate * 1.2 { effectiveBitrate = max(source.bitrate * 0.8, minBitrate) }
-            effectiveBitrate = max(effectiveBitrate, minBitrate) // Ensure minimum bitrate
+            effectiveBitrate = max(effectiveBitrate, minBitrate)
             compressionProperties[AVVideoAverageBitRateKey] = Int(effectiveBitrate)
         } else {
-            // Use quality factor if not using explicit bitrate (clamp between 0.0 and 1.0)
             compressionProperties[AVVideoQualityKey] = max(0.0, min(1.0, config.videoQuality))
         }
 
-        // Final video settings dictionary
+        // --- Final Output Settings ---
         return [
-            AVVideoCodecKey: config.videoCodec.avCodecType, // Specify the chosen codec
-            AVVideoWidthKey: targetSize.width,             // Target video width
-            AVVideoHeightKey: targetSize.height,            // Target video height
-            AVVideoCompressionPropertiesKey: compressionProperties // Include all compression settings
+            AVVideoCodecKey: targetCodec.avCodecType,
+            AVVideoWidthKey: targetSize.width,
+            AVVideoHeightKey: targetSize.height,
+            AVVideoCompressionPropertiesKey: compressionProperties
         ]
     }
 
