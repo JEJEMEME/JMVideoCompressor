@@ -597,17 +597,15 @@ public class JMVideoCompressor {
                 // Use HEVC Main10 AutoLevel for 10-bit HDR
                 profileLevel = kVTProfileLevel_HEVC_Main10_AutoLevel as String
 
-                // Add HDR metadata to compression properties
-                if let primaries = source.colorPrimaries {
-                    compressionProperties[kVTCompressionPropertyKey_ColorPrimaries as String] = primaries
+                // --- Add Automatic HDR Metadata Insertion (iOS 16+/macOS 13+) ---
+                if #available(iOS 16.0, macOS 13.0, *) {
+                    compressionProperties[kVTCompressionPropertyKey_HDRMetadataInsertionMode as String] = kVTHDRMetadataInsertionMode_Auto
+                    print("Info: HDR detected. Enabled Automatic HDR Metadata Insertion (HEVC Main10 profile).")
+                } else {
+                    print("Warning: HDR detected, but OS version is below iOS 16/macOS 13. Automatic HDR metadata insertion not available. HDR info might be lost.")
+                    // Fallback or add manual metadata setting for older OS if needed/possible
                 }
-                if let transfer = source.transferFunction {
-                    compressionProperties[kVTCompressionPropertyKey_TransferFunction as String] = transfer
-                }
-                if let matrix = source.yCbCrMatrix {
-                    compressionProperties[kVTCompressionPropertyKey_YCbCrMatrix as String] = matrix
-                }
-                print("Info: HDR detected and HEVC Main10 profile selected. Applying HDR metadata.")
+                // --- End Automatic HDR Setting ---
             } else {
                  // HDR detected but codec is not HEVC
                  print("Warning: HDR metadata detected, but video codec is not HEVC. HDR information might be lost. Consider using .hevc codec.")
