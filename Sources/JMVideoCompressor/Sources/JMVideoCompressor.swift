@@ -210,9 +210,9 @@ public class JMVideoCompressor {
         }
 
         // --- Configure Reader Outputs ---
+        // Revert to 8-bit YUV pixel format (like FYVideoCompressor) to test interaction with Auto HDR mode
         let videoOutputSettings: [String: Any] = [
-            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange
-            // Consider kCVPixelFormatType_420YpCbCr10BiPlanarFullRange if needed, but VideoRange is more common for video.
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
         ]
         let videoOutput = AVAssetReaderTrackOutput(track: sourceVideoTrack, outputSettings: videoOutputSettings)
         videoOutput.alwaysCopiesSampleData = false // Keep false for performance unless modification is needed
@@ -525,22 +525,54 @@ public class JMVideoCompressor {
         async let transform = track.load(.preferredTransform)
         async let formatDescriptions = track.load(.formatDescriptions)
 
-        // Default SDR values
-        var colorPrimaries: String? = kCMFormatDescriptionColorPrimaries_SMPTE_C as String // Or ITU_R_709_2? Check common SDR
-        var transferFunction: String? = kCMFormatDescriptionTransferFunction_ITU_R_709_2 as String
-        var yCbCrMatrix: String? = kCMFormatDescriptionYCbCrMatrix_ITU_R_709_2 as String
+        // Initialize with nil, assign defaults only if reading fails
+        var colorPrimaries: String? = nil
+        var transferFunction: String? = nil
+        var yCbCrMatrix: String? = nil
 
         // Attempt to read HDR metadata from format descriptions
-        if let formatDesc = try await formatDescriptions.first {
-            func getStringValue(for key: CFString) -> String? {
-                CMFormatDescriptionGetExtension(formatDesc, extensionKey: key) as? String
+        do {
+            if let formatDescArray = try await formatDescriptions, let formatDesc = formatDescArray.first {
+                print("Debug: Successfully loaded format description.")
+                func getStringValue(for key: CFString) -> String? {
+                    // Use optional binding to safely handle potential nil from CMFormatDescriptionGetExtension
+                    if let value = CMFormatDescriptionGetExtension(formatDesc, extensionKey: key) {
+                        // Ensure the value is actually a String before casting
+                        if let stringValue = value as? String {
+                            print("Debug: Read value for \(key as String): \(stringValue)")
+                            return stringValue
+                        } else {
+                            print("Debug: Value found for \(key as String), but it's not a String: \(value)")
+                            return nil
+                        }
+                    } else {
+                        print("Debug: No value found for key: \(key as String)")
+                        return nil
+                    }
+                }
+                colorPrimaries = getStringValue(for: kCMFormatDescriptionExtension_ColorPrimaries)
+                transferFunction = getStringValue(for: kCMFormatDescriptionExtension_TransferFunction)
+                yCbCrMatrix = getStringValue(for: kCMFormatDescriptionExtension_YCbCrMatrix)
+            } else {
+                print("Warning: Could not load format descriptions or the array was empty.")
             }
-            colorPrimaries = getStringValue(for: kCMFormatDescriptionExtension_ColorPrimaries) ?? colorPrimaries
-            transferFunction = getStringValue(for: kCMFormatDescriptionExtension_TransferFunction) ?? transferFunction
-            yCbCrMatrix = getStringValue(for: kCMFormatDescriptionExtension_YCbCrMatrix) ?? yCbCrMatrix
-        } else {
-            print("Warning: Could not read source video format description.")
+        } catch {
+            print("Error loading format descriptions: \(error)")
         }
+
+        // Assign default SDR values ONLY if reading failed (values are still nil)
+        if colorPrimaries == nil {
+             colorPrimaries = kCMFormatDescriptionColorPrimaries_ITU_R_709_2 as String // Common SDR Default
+             print("Debug: Assigning default SDR ColorPrimaries: \(colorPrimaries!)")
+        }
+         if transferFunction == nil {
+             transferFunction = kCMFormatDescriptionTransferFunction_ITU_R_709_2 as String // Common SDR Default
+             print("Debug: Assigning default SDR TransferFunction: \(transferFunction!)")
+         }
+         if yCbCrMatrix == nil {
+             yCbCrMatrix = kCMFormatDescriptionYCbCrMatrix_ITU_R_709_2 as String // Common SDR Default
+             print("Debug: Assigning default SDR YCbCrMatrix: \(yCbCrMatrix!)")
+         }
 
         return try await SourceVideoSettings(
             size: size, fps: fps, bitrate: bitrate, transform: transform,
@@ -594,13 +626,13 @@ public class JMVideoCompressor {
         // --- Set Profile Level and HDR Metadata --- 
         if isHDR {
             if targetCodec == .hevc {
-                // Use HEVC Main AutoLevel (like FYVideoCompressor) even for HDR when using Auto mode
-                profileLevel = kVTProfileLevel_HEVC_Main_AutoLevel as String
+                // Restore HEVC Main10 AutoLevel for 10-bit HDR
+                profileLevel = kVTProfileLevel_HEVC_Main10_AutoLevel as String
 
                 // --- Add Automatic HDR Metadata Insertion (iOS 16+/macOS 13+) ---
                 if #available(iOS 16.0, macOS 13.0, *) {
                     compressionProperties[kVTCompressionPropertyKey_HDRMetadataInsertionMode as String] = kVTHDRMetadataInsertionMode_Auto
-                    print("Info: HDR detected. Enabled Automatic HDR Metadata Insertion (HEVC Main profile).") // Log updated profile
+                    print("Info: HDR detected. Enabled Automatic HDR Metadata Insertion (HEVC Main10 profile).") // Log updated profile
                 } else {
                     print("Warning: HDR detected, but OS version is below iOS 16/macOS 13. Automatic HDR metadata insertion not available. HDR info might be lost.")
                     // Fallback or add manual metadata setting for older OS if needed/possible
