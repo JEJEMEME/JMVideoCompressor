@@ -532,7 +532,11 @@ public class JMVideoCompressor {
 
         // Attempt to read HDR metadata from format descriptions
         do {
-            if let formatDescArray = try await formatDescriptions, let formatDesc = formatDescArray.first {
+            // Await the loading of format descriptions directly
+            let formatDescArray = try await formatDescriptions
+
+            // Check if the array is not empty and get the first description
+            if let formatDesc = formatDescArray.first {
                 print("Debug: Successfully loaded format description.")
                 func getStringValue(for key: CFString) -> String? {
                     // Use optional binding to safely handle potential nil from CMFormatDescriptionGetExtension
