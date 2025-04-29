@@ -594,13 +594,13 @@ public class JMVideoCompressor {
         // --- Set Profile Level and HDR Metadata --- 
         if isHDR {
             if targetCodec == .hevc {
-                // Use HEVC Main10 AutoLevel for 10-bit HDR
-                profileLevel = kVTProfileLevel_HEVC_Main10_AutoLevel as String
+                // Use HEVC Main AutoLevel (like FYVideoCompressor) even for HDR when using Auto mode
+                profileLevel = kVTProfileLevel_HEVC_Main_AutoLevel as String
 
                 // --- Add Automatic HDR Metadata Insertion (iOS 16+/macOS 13+) ---
                 if #available(iOS 16.0, macOS 13.0, *) {
                     compressionProperties[kVTCompressionPropertyKey_HDRMetadataInsertionMode as String] = kVTHDRMetadataInsertionMode_Auto
-                    print("Info: HDR detected. Enabled Automatic HDR Metadata Insertion (HEVC Main10 profile).")
+                    print("Info: HDR detected. Enabled Automatic HDR Metadata Insertion (HEVC Main profile).") // Log updated profile
                 } else {
                     print("Warning: HDR detected, but OS version is below iOS 16/macOS 13. Automatic HDR metadata insertion not available. HDR info might be lost.")
                     // Fallback or add manual metadata setting for older OS if needed/possible
