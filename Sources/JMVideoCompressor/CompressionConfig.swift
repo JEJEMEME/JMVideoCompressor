@@ -12,7 +12,7 @@ import VideoToolbox // For codec check potentially
 
 /// Enum representing common audio codec types for configuration.
 public enum AudioCodecType: UInt32 {
-    case aac = 0x61616320       // kAudioFormatMPEG4AAC
+    case aac = 0x61616320      // kAudioFormatMPEG4AAC
     case aac_he_v1 = 0x61616368 // kAudioFormatMPEG4AAC_HE
     case aac_he_v2 = 0x61616370 // kAudioFormatMPEG4AAC_HE_V2
 
@@ -60,10 +60,10 @@ public enum VideoCodec {
 
 /// Hints about the video content type to potentially optimize compression settings.
 public enum VideoContentType {
-    case standard       // General purpose video.
-    case highMotion     // Content with lots of fast movement (e.g., sports, action).
-    case lowMotion      // Content with little movement (e.g., interviews, presentations).
-    case screencast     // Screen recordings, often with sharp text and graphics.
+    case standard      // General purpose video.
+    case highMotion    // Content with lots of fast movement (e.g., sports, action).
+    case lowMotion     // Content with little movement (e.g., interviews, presentations).
+    case screencast    // Screen recordings, often with sharp text and graphics.
 }
 
 /// Options for video preprocessing (currently placeholders for future features).
@@ -104,7 +104,11 @@ public struct CompressionConfig: CustomStringConvertible {
     public var videoQuality: Float = 0.7
     public var maxKeyFrameInterval: Int = 30
     public var fps: Float = 30
+    /// 구체적인 크기 조절 설정. `maxLongerDimension`이 설정되면 무시됩니다.
     public var scale: CGSize? = nil
+    /// **(신규)** 비디오의 긴 쪽(가로 또는 세로)의 최대 길이를 지정합니다. 설정되면 `scale` 값보다 우선 적용됩니다.
+    /// 예: 1920으로 설정하면, 가로 영상은 너비가 1920을 넘지 않고, 세로 영상은 높이가 1920을 넘지 않도록 비율을 유지하며 조절됩니다.
+    public var maxLongerDimension: CGFloat? = nil
 
     // MARK: - Audio Settings
     public var audioCodec: AudioCodecType = .aac
@@ -141,7 +145,14 @@ public struct CompressionConfig: CustomStringConvertible {
         }
         desc += "    Max Keyframe Interval: \(maxKeyFrameInterval)\n"
         desc += "    Target FPS: \(fps)\n"
-        desc += "    Scale: \(scale?.debugDescription ?? "Original")\n"
+        // maxLongerDimension이 우선순위가 높음을 명시
+        if let maxDim = maxLongerDimension {
+             desc += "    Max Longer Dimension: \(maxDim) (Overrides scale)\n"
+        } else if let scaleDesc = scale {
+             desc += "    Scale: \(scaleDesc.debugDescription)\n"
+        } else {
+             desc += "    Scale: Original\n"
+        }
         desc += "  Audio:\n"
         desc += "    Codec: \(audioCodec)\n"
         desc += "    Bitrate: \(audioBitrate) bps\n"
