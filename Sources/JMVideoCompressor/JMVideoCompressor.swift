@@ -7,8 +7,8 @@
 import Foundation
 import AVFoundation
 import CoreMedia
-import CoreServices // For UTType definitions if needed
-import VideoToolbox // Import VideoToolbox for profile level constants and codec checks
+import CoreServices
+import VideoToolbox
 
 // MARK: - Top-Level Public Enum
 
@@ -790,10 +790,9 @@ public class JMVideoCompressor {
             // Longer keyframe interval can save space if motion is low
             config.maxKeyFrameInterval = max(config.maxKeyFrameInterval, 60)
         case .screencast:
-            // Higher bitrate/quality often needed for sharp text/graphics
             if config.useExplicitBitrate { config.videoBitrate = max(config.videoBitrate, 2_500_000) }
             else { config.videoQuality = max(config.videoQuality, 0.75) }
-            // Longer keyframe interval usually okay for screencasts
+            // Directly modify the property on the config struct
             config.maxKeyFrameInterval = max(config.maxKeyFrameInterval, 90)
         case .standard:
             break // No specific adjustments for standard content
