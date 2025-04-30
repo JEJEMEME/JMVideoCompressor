@@ -82,23 +82,31 @@ let sourceVideoURL = URL(fileURLWithPath: "/path/to/your/input/video.mp4") // Re
 
 **3. Basic Compression using Presets**
 
-Use predefined `VideoQuality` presets for quick compression. The output file will be placed in a temporary directory by default, or you can specify an `outputDirectory`.
+Use predefined `VideoQuality` presets for quick compression. The output file will be placed in a temporary directory by default. To specify an output location, modify the `CompressionConfig` obtained from the preset.
 
 ```swift
 do {
-    // Define where the compressed file should go (optional, defaults to temp dir)
+    // Get the default config for the desired quality
+    var config = VideoQuality.mediumQuality.defaultConfig
+
+    // Define where the compressed file should go
     let outputDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("CompressedVideos")
     try? FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
+    config.outputDirectory = outputDirectory // Set output directory in the config
+
+    // Alternatively, set a specific output URL
+    // let specificOutputURL = outputDirectory.appendingPathComponent("my_medium_video.mp4")
+    // config.outputURL = specificOutputURL // If outputURL is set, outputDirectory is ignored
 
     print("Starting compression with medium quality preset...")
 
-    // Compress with progress reporting
+    // Compress with progress reporting using the modified config
     let result = try await compressor.compressVideo(
         sourceVideoURL,
-        quality: .mediumQuality, // Choose from .lowQuality, .mediumQuality, .highQuality, .socialMedia, .messaging
-        outputDirectory: outputDirectory, // Specify output location
+        // Note: The 'quality' parameter provides the initial config,
+        // but we pass our modified 'config' object for compression.
+        config: config, // Pass the config with the output path set
         progressHandler: { progress in
-            // Update UI or log progress (runs on a background thread)
             DispatchQueue.main.async {
                  print("Compression Progress: \(String(format: "%.0f%%", progress * 100))")
             }
@@ -132,8 +140,10 @@ do {
     customConfig.videoCodec = .hevc // Use HEVC if supported
     customConfig.useExplicitBitrate = true // Use bitrate instead of quality factor
     customConfig.videoBitrate = 1_500_000 // 1.5 Mbps
-    customConfig.scale = CGSize(width: 1280, height: -1) // Scale width to 1280p, maintain aspect ratio (height: -1)
+    customConfig.useAdaptiveBitrate = true // Optional: Cap bitrate near source if source is lower
+    customConfig.maxLongerDimension = 1280 // Set max length of the longer side to 1280p, maintain aspect ratio
     customConfig.fps = 24 // Target 24 FPS (will use frame reduction if source > 24)
+    customConfig.forceVisualEncodingDimensions = true // Optional: Encode rotated videos with visual dimensions (e.g., 1080x1920)
 
     // --- Audio Settings ---
     customConfig.audioCodec = .aac_he_v1 // High-Efficiency AAC
@@ -204,16 +214,18 @@ The `CompressionConfig` struct provides detailed control over the compression pr
 
 * `videoCodec`: `VideoCodec` (`.h264` or `.hevc`). Use `codec.isSupported()` to check for HEVC hardware encoding availability. Select `.hevc` for HDR video to preserve metadata (requires iOS 16+/macOS 13+ for automatic insertion).
 * `useExplicitBitrate`: `Bool`. If `true`, uses `videoBitrate`. If `false`, uses `videoQuality`. Default is `true`.
-* `videoBitrate`: `Int`. Target average video bitrate in bits per second (e.g., `2_000_000` for 2 Mbps). Effective only if `useExplicitBitrate` is `true`. The compressor might adjust this down if it significantly exceeds the source bitrate.
+* `videoBitrate`: `Int`. Target average video bitrate in bits per second (e.g., `2_000_000` for 2 Mbps). Effective only if `useExplicitBitrate` is `true`. See also `useAdaptiveBitrate`.
 * `videoQuality`: `Float`. Target quality between 0.0 (lowest) and 1.0 (highest). Effective only if `useExplicitBitrate` is `false`. This is a hint to the encoder; the resulting bitrate varies.
+* `useAdaptiveBitrate`: `Bool`. Default is `false`. If `true` and `useExplicitBitrate` is `true`, the target `videoBitrate` will be capped closer to the source video's bitrate if the source bitrate is lower than the target `videoBitrate`. This prevents unnecessarily increasing the bitrate for already low-bitrate videos.
 * `maxKeyFrameInterval`: `Int`. Maximum interval between keyframes (e.g., `30`). Lower values can improve seeking but may increase file size.
 * `fps`: `Float`. Target frame rate (e.g., `30`). If lower than the source FPS, a `VideoFrameReducer` strategy is used.
-* `scale`: `CGSize?`. Target dimensions.
+* `maxLongerDimension`: `CGFloat?`. Target maximum length for the longer side of the video (width or height). Aspect ratio is maintained.
     * `nil`: Keep original dimensions.
-    * `CGSize(width: W, height: H)`: Specific target width and height.
-    * `CGSize(width: W, height: -1)`: Set target width `W`, calculate height to maintain aspect ratio.
-    * `CGSize(width: -1, height: H)`: Set target height `H`, calculate width to maintain aspect ratio.
-    * Dimensions are rounded down to the nearest even number.
+    * Value > 0: Sets the maximum size for the longer dimension. For example, `1920` means the longer side (width for landscape, height for portrait) will be scaled down to 1920 pixels, and the other side will be scaled proportionally.
+    * Dimensions are rounded down to the nearest even number. This replaces the previous `scale` property.
+* `forceVisualEncodingDimensions`: `Bool`. Default is `false`.
+    * `false`: Rotated videos (e.g., portrait videos shot on iPhone) maintain their original encoding dimensions (e.g., 1920x1080) and the rotation is preserved via transform metadata in the output file. The `maxLongerDimension` scaling is applied to the visual size before determining encoding size.
+    * `true`: Rotated videos are encoded using their visual dimensions (e.g., 1080x1920). The transform metadata is removed (`.identity`). This can improve compatibility with players that don't respect transform metadata, but might slightly affect quality or compression efficiency.
 
 **Audio Settings:**
 
@@ -275,8 +287,8 @@ The successful result of `compressVideo` includes a `CompressionAnalytics` struc
 * `compressedFileSize`: `Int64` - Size of the output file in bytes.
 * `compressionRatio`: `Float` - `originalFileSize / compressedFileSize`. Higher is better.
 * `processingTime`: `TimeInterval` - Time taken for compression in seconds.
-* `originalDimensions`: `CGSize` - Width and height of the original video.
-* `compressedDimensions`: `CGSize` - Width and height of the compressed video.
+* `originalDimensions`: `CGSize` - **Visual** dimensions (width, height) of the original video, considering rotation metadata.
+* `compressedDimensions`: `CGSize` - **Encoded** dimensions (width, height) of the compressed video track. This might differ from the visual dimensions if `forceVisualEncodingDimensions` is `false` and the video was rotated.
 * `originalVideoBitrate`: `Float` - Estimated bitrate of the source video track (bps).
 * `compressedVideoBitrate`: `Float` - Target or estimated bitrate of the compressed video track (bps).
 * `originalAudioBitrate`: `Float?` - Estimated bitrate of the source audio track (bps), if present.
