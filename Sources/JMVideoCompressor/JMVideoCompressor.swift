@@ -58,8 +58,8 @@ public enum VideoQuality {
              config.audioChannels = 1
              config.preprocessing.noiseReduction = .medium
         }
-        // 기본 프리셋은 시각적 인코딩을 강제하지 않음 (기존 동작 유지)
-        // config.forceVisualEncodingDimensions = false // 기본값이 false이므로 명시적 설정 불필요
+        // 기본 프리셋에서는 적응형 비트레이트를 사용하지 않음 (기존 동작 유지)
+        // config.useAdaptiveBitrate = false
         return config
     }
 }
@@ -116,7 +116,7 @@ public class JMVideoCompressor {
         _ url: URL,
         quality: VideoQuality = .mediumQuality,
         frameReducer: VideoFrameReducer = ReduceFrameEvenlySpaced(),
-        outputDirectory: URL? = nil, // Deprecated for config-based approach
+        outputDirectory: URL? = nil, // Deprecated
         progressHandler: ((Float) -> Void)? = nil
     ) async throws -> (url: URL, analytics: CompressionAnalytics) {
         var config = quality.defaultConfig
@@ -124,11 +124,6 @@ public class JMVideoCompressor {
             config.outputDirectory = explicitOutputDir
             config.outputURL = nil
         }
-        // 사용자가 forceVisualEncodingDimensions를 프리셋과 함께 사용하고 싶다면,
-        // 이 함수 호출 후 config 값을 직접 수정해야 함.
-        // 예: var config = VideoQuality.highQuality.defaultConfig
-        //     config.forceVisualEncodingDimensions = true
-        //     try await compressor.compressVideo(url, config: config, ...)
         return try await compressVideo(url, config: config, frameReducer: frameReducer, progressHandler: progressHandler)
     }
 
@@ -174,7 +169,6 @@ public class JMVideoCompressor {
         let needsFrameReduction = targetFPS < sourceVideoSettings.fps
 
         // --- 여기가 중요: createTargetVideoSettings 호출 시 config 전달 ---
-        // targetVideoSettings 딕셔너리와 함께 finalTransform 값도 받아옴
         let (targetVideoSettings, finalTransform) = try createTargetVideoSettings(config: effectiveConfig, source: sourceVideoSettings)
         let targetAudioSettings = try createTargetAudioSettings(config: effectiveConfig, source: sourceAudioSettings)
 
@@ -204,7 +198,7 @@ public class JMVideoCompressor {
         // Configure Reader Outputs
         let videoOutputSettings: [String: Any] = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange]
         let videoOutput = AVAssetReaderTrackOutput(track: sourceVideoTrack, outputSettings: videoOutputSettings)
-        videoOutput.alwaysCopiesSampleData = false // 성능 향상을 위해 false 권장
+        videoOutput.alwaysCopiesSampleData = false
         guard localReader.canAdd(videoOutput) else { throw JMVideoCompressorError.compressionFailed(NSError(domain: "JMVideoCompressor", code: -2, userInfo: [NSLocalizedDescriptionKey: "Cannot add video reader output."])) }
         localReader.add(videoOutput)
 
@@ -223,8 +217,7 @@ public class JMVideoCompressor {
         // --- Configure Writer Inputs ---
         let videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: targetVideoSettings)
         videoInput.expectsMediaDataInRealTime = false
-        // --- 여기가 중요: 계산된 finalTransform 적용 ---
-        videoInput.transform = finalTransform // 원본 transform 대신 계산된 transform 사용
+        videoInput.transform = finalTransform // 계산된 transform 적용
         guard localWriter.canAdd(videoInput) else { throw JMVideoCompressorError.compressionFailed(NSError(domain: "JMVideoCompressor", code: -3, userInfo: [NSLocalizedDescriptionKey: "Cannot add video writer input."])) }
         localWriter.add(videoInput)
         isolationQueue.sync { self.videoInput = videoInput }
@@ -485,7 +478,7 @@ public class JMVideoCompressor {
 
     /// Creates the video output settings dictionary and the appropriate transform.
     private func createTargetVideoSettings(config: CompressionConfig, source: SourceVideoSettings) throws -> (settings: [String: Any], transform: CGAffineTransform) {
-        // 1. Calculate the desired *visual* output size based on constraints
+        // 1. Calculate the desired *visual* output size
         let targetVisualSize = calculateTargetSize(
             scale: config.scale,
             maxLongerDimension: config.maxLongerDimension,
@@ -493,21 +486,17 @@ public class JMVideoCompressor {
             sourceTransform: source.transform
         )
 
-        // 2. Determine the actual encoding dimensions and transform based on the new flag
+        // 2. Determine encoding dimensions and transform
         let finalEncodingWidth: CGFloat
         let finalEncodingHeight: CGFloat
         let finalTransform: CGAffineTransform
-
         let sourceIsRotated = abs(source.transform.b) == 1.0 && abs(source.transform.c) == 1.0
 
         if config.forceVisualEncodingDimensions {
-            // Encode directly using the visual dimensions, apply identity transform
             finalEncodingWidth = targetVisualSize.width
             finalEncodingHeight = targetVisualSize.height
-            finalTransform = .identity // <<-- 중요: 회전 정보 제거
-            print("Info: Forcing visual encoding dimensions (\(finalEncodingWidth)x\(finalEncodingHeight)) with identity transform.")
+            finalTransform = .identity
         } else {
-            // Maintain current behavior: encode based on original orientation, copy transform
             if sourceIsRotated {
                 finalEncodingWidth = targetVisualSize.height
                 finalEncodingHeight = targetVisualSize.width
@@ -515,8 +504,7 @@ public class JMVideoCompressor {
                 finalEncodingWidth = targetVisualSize.width
                 finalEncodingHeight = targetVisualSize.height
             }
-            finalTransform = source.transform // <<-- 중요: 원본 회전 정보 복사
-            print("Info: Using original encoding orientation (\(finalEncodingWidth)x\(finalEncodingHeight)) and copying transform.")
+            finalTransform = source.transform
         }
 
         // 3. Prepare compression properties
@@ -525,6 +513,47 @@ public class JMVideoCompressor {
             AVVideoAllowFrameReorderingKey: false,
         ]
 
+        // --- 비트레이트 설정 로직 수정 ---
+        if config.useExplicitBitrate {
+            let minBitrate: Float = 50_000 // 최소 비트레이트 설정
+            var targetBitrate = Float(config.videoBitrate) // 사용자가 지정한 최대 목표 비트레이트
+
+            // 적응형 비트레이트 사용 시
+            if config.useAdaptiveBitrate && source.bitrate > 0 { // 원본 비트레이트가 유효할 때
+                if source.bitrate < targetBitrate {
+                    // 원본 비트레이트가 목표보다 낮으면 원본 비트레이트를 목표로 사용 (단, 최소값 이상)
+                    targetBitrate = max(source.bitrate, minBitrate)
+                    print("Info: Adaptive bitrate enabled. Using source bitrate (\(source.bitrate)) as target (capped at min: \(minBitrate)).")
+                } else {
+                    // 원본 비트레이트가 목표보다 높거나 같으면, 목표 비트레이트를 사용
+                    // (단, 원본 비트레이트의 1.2배를 넘지 않도록 하는 기존 로직은 유지하거나 제거/수정 가능 - 여기서는 유지)
+                    if targetBitrate > source.bitrate * 1.2 {
+                        targetBitrate = max(source.bitrate * 0.8, minBitrate) // 원본의 80% 또는 최소값
+                        print("Info: Adaptive bitrate enabled. Target bitrate (\(config.videoBitrate)) capped near source bitrate (\(source.bitrate)). New target: \(targetBitrate)")
+                    } else {
+                         print("Info: Adaptive bitrate enabled. Using user-specified target bitrate (\(targetBitrate)) as it's lower than source.")
+                    }
+                }
+            } else {
+                 // 적응형 비트레이트를 사용하지 않거나 원본 비트레이트 정보가 없을 경우, 기존 로직 사용
+                 if targetBitrate > source.bitrate * 1.2 && source.bitrate > 0 {
+                     targetBitrate = max(source.bitrate * 0.8, minBitrate)
+                 }
+            }
+
+            // 최종적으로 최소 비트레이트 보장
+            let effectiveBitrate = max(targetBitrate, minBitrate)
+            compressionProperties[AVVideoAverageBitRateKey] = Int(effectiveBitrate)
+            print("Final Effective Video Bitrate: \(effectiveBitrate) bps")
+
+        } else { // 품질 기반 설정
+            compressionProperties[AVVideoQualityKey] = max(0.0, min(1.0, config.videoQuality))
+            print("Using Quality-Based Video Setting: \(config.videoQuality)")
+        }
+        // --- 비트레이트 설정 로직 끝 ---
+
+
+        // ... (기존의 profileLevel, isHDR 설정 로직) ...
         let isHDR: Bool
         if source.colorPrimaries == (kCMFormatDescriptionColorPrimaries_ITU_R_2020 as String) ||
            source.transferFunction == "ITU_R_2100_PQ" ||
@@ -533,10 +562,8 @@ public class JMVideoCompressor {
         } else {
             isHDR = false
         }
-
         let targetCodec = config.videoCodec
         var profileLevel: String? = nil
-
         if isHDR {
             if targetCodec == .hevc {
                 profileLevel = kVTProfileLevel_HEVC_Main10_AutoLevel as String
@@ -558,15 +585,6 @@ public class JMVideoCompressor {
         }
         if let level = profileLevel { compressionProperties[AVVideoProfileLevelKey] = level }
 
-        if config.useExplicitBitrate {
-            let minBitrate: Float = 50_000
-            var effectiveBitrate = Float(config.videoBitrate)
-            if effectiveBitrate > source.bitrate * 1.2 { effectiveBitrate = max(source.bitrate * 0.8, minBitrate) }
-            effectiveBitrate = max(effectiveBitrate, minBitrate)
-            compressionProperties[AVVideoAverageBitRateKey] = Int(effectiveBitrate)
-        } else {
-            compressionProperties[AVVideoQualityKey] = max(0.0, min(1.0, config.videoQuality))
-        }
 
         // 4. Construct the final settings dictionary
         let settings: [String: Any] = [
@@ -591,8 +609,10 @@ public class JMVideoCompressor {
         let targetSampleRate = max(8000.0, min(192_000.0, Double(config.audioSampleRate)))
         let minBitrate: Float = 16_000
         var effectiveBitrate = Float(config.audioBitrate)
-        if effectiveBitrate > source.bitrate * 1.2 { effectiveBitrate = max(source.bitrate * 0.8, minBitrate) }
-        effectiveBitrate = max(effectiveBitrate, minBitrate)
+        if effectiveBitrate > source.bitrate * 1.2 && source.bitrate > 0 { // 원본 오디오 비트레이트 정보가 있을 때만 적용
+             effectiveBitrate = max(source.bitrate * 0.8, minBitrate)
+        }
+        effectiveBitrate = max(effectiveBitrate, minBitrate) // 최소값 보장
 
         var targetCodec = config.audioCodec
         if (targetCodec == .aac_he_v1 || targetCodec == .aac_he_v2) && targetSampleRate > 48000 { targetCodec = .aac }
