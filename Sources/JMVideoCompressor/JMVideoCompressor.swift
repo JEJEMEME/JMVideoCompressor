@@ -185,6 +185,23 @@ public class JMVideoCompressor {
         // --- Setup Reader & Writer ---
         let localReader: AVAssetReader
         let localWriter: AVAssetWriter
+
+        // Defer cleanup actions for reader and writer
+        defer {
+            // Ensure cleanup happens even if initialization fails partially
+            // Access reader/writer via self within the isolation queue for safety
+            isolationQueue.sync {
+                self.assetReader?.cancelReading()
+                self.assetWriter?.cancelWriting()
+                // Nil out references to break potential retain cycles if needed
+                self.assetReader = nil
+                self.assetWriter = nil
+                self.videoInput = nil
+                self.audioInput = nil
+            }
+             print("JMVideoCompressor: Deferred cleanup executed.")
+        }
+
         do {
             localReader = try AVAssetReader(asset: sourceAsset)
         } catch {
@@ -203,7 +220,7 @@ public class JMVideoCompressor {
         }
         localWriter.shouldOptimizeForNetworkUse = true
 
-        // Store reader/writer references within isolation queue
+        // Store reader/writer references within isolation queue AFTER successful init
         isolationQueue.sync {
             self.assetReader = localReader
             self.assetWriter = localWriter
@@ -323,6 +340,7 @@ public class JMVideoCompressor {
                  throw JMVideoCompressorError.cancelled
             default:
                  try? FileManager.default.removeItem(at: outputURL)
+                 // No need to call cancelWriting here, defer handles it
                  throw JMVideoCompressorError.compressionFailed(NSError(domain: "JMVideoCompressor", code: -5, userInfo: [NSLocalizedDescriptionKey: "Writer finished with unexpected status: \(localWriter.status.rawValue)"]))
             }
         }
@@ -334,9 +352,10 @@ public class JMVideoCompressor {
             guard !self.cancelled else { return }
             self.cancelled = true
             // Use the reader/writer references stored during setup
-            self.assetReader?.cancelReading()
-            self.assetWriter?.cancelWriting()
-            print("JMVideoCompressor: Cancellation requested.")
+            // Defer in compressVideo will handle the actual cancellation calls
+            // self.assetReader?.cancelReading() // Now handled by defer
+            // self.assetWriter?.cancelWriting() // Now handled by defer
+            print("JMVideoCompressor: Cancellation requested. Deferred cleanup will handle resource release.")
         }
     }
 

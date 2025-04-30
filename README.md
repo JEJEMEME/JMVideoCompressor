@@ -9,6 +9,7 @@ A Swift library designed for efficient video compression on iOS and macOS using 
 * **Easy Presets:** Compress videos using predefined quality settings (`.lowQuality`, `.mediumQuality`, `.highQuality`, `.socialMedia`, `.messaging`).
 * **Custom Configuration:** Fine-tune compression with `CompressionConfig`, controlling codecs (H.264, HEVC), bitrate/quality, resolution scaling, frame rate, audio settings, and more.
 * **Codec Support:** Compress using H.264 or HEVC (H.265), with checks for HEVC hardware support.
+* **HDR Support:** Preserves High Dynamic Range (HDR) metadata (like HLG, PQ) when compressing to HEVC format on supported OS versions (iOS 16+/macOS 13+).
 * **Frame Rate Reduction:** Reduce video frame rate using different strategies (e.g., evenly spaced, random selection).
 * **Asynchronous API:** Modern `async/await` syntax for non-blocking compression tasks.
 * **Progress Reporting:** Monitor compression progress via a closure.
@@ -19,7 +20,7 @@ A Swift library designed for efficient video compression on iOS and macOS using 
 ## Requirements
 
 * iOS 16.0+
-* macOS 12.0+
+* macOS 13.0+
 * Xcode 14.0+ (or a version compatible with Swift 5.7+)
 * Swift 5.7+
 
@@ -201,7 +202,7 @@ The `CompressionConfig` struct provides detailed control over the compression pr
 
 **Video Settings:**
 
-* `videoCodec`: `VideoCodec` (`.h264` or `.hevc`). Use `codec.isSupported()` to check for HEVC hardware encoding availability.
+* `videoCodec`: `VideoCodec` (`.h264` or `.hevc`). Use `codec.isSupported()` to check for HEVC hardware encoding availability. Select `.hevc` for HDR video to preserve metadata (requires iOS 16+/macOS 13+ for automatic insertion).
 * `useExplicitBitrate`: `Bool`. If `true`, uses `videoBitrate`. If `false`, uses `videoQuality`. Default is `true`.
 * `videoBitrate`: `Int`. Target average video bitrate in bits per second (e.g., `2_000_000` for 2 Mbps). Effective only if `useExplicitBitrate` is `true`. The compressor might adjust this down if it significantly exceeds the source bitrate.
 * `videoQuality`: `Float`. Target quality between 0.0 (lowest) and 1.0 (highest). Effective only if `useExplicitBitrate` is `false`. This is a hint to the encoder; the resulting bitrate varies.
@@ -224,7 +225,7 @@ The `CompressionConfig` struct provides detailed control over the compression pr
 **Optimization Settings:**
 
 * `contentAwareOptimization`: `Bool`. If `true` (default), analyzes content (motion, screencast) to potentially adjust `maxKeyFrameInterval` and quality/bitrate settings slightly.
-* `preprocessing`: `PreprocessingOptions`. Contains placeholders for future features like noise reduction (`noiseReduction`) and auto levels (`autoLevels`). Currently has minimal effect.
+* `preprocessing`: `PreprocessingOptions`. Contains options for preprocessing steps. `noiseReduction` can be applied (used in some quality presets like `.lowQuality`). `autoLevels` is currently a placeholder.
 
 **Output Settings:**
 
