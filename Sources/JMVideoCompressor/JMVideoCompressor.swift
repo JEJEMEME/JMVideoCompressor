@@ -55,6 +55,8 @@ public enum VideoQuality {
             if VideoCodec.hevc.isSupported() {
                 config.videoCodec = .hevc
             }
+            // High Quality에서는 노이즈 제거를 약하게 하거나 끔
+            config.preprocessing.noiseReduction = .low
         case .socialMedia:
              config.scale = CGSize(width: 1280, height: -1) // Target 720p height
              config.videoBitrate = 3_500_000 // Slightly lower than medium bitrate
@@ -128,9 +130,7 @@ public class JMVideoCompressor {
     private var totalSourceTime: CMTime = .zero // Set once, read concurrently okay
 
     // Core Image context for preprocessing (created lazily)
-    // CIContext 생성은 비용이 들 수 있으므로 클래스 멤버로 두고 재사용하는 것이 더 효율적입니다.
-    // 여기서는 간단하게 processTrack 내에서 lazy하게 생성합니다.
-    private lazy var ciContext: CIContext = CIContext(options: nil)
+    private lazy var ciContext: CIContext = CIContext(options: [.workingColorSpace: NSNull(), .highQualityDownsample: false]) // Optimize context slightly
 
     // MARK: - Initialization
     public init() {}
@@ -232,12 +232,12 @@ public class JMVideoCompressor {
         }
 
         // --- Configure Reader Outputs ---
-        // *** CRITICAL FOR HDR: Use a 10-bit pixel format to preserve HDR data during reading ***
-        // *** For preprocessing with CoreImage, using BGRA might be simpler if HDR is not a primary concern,
-        //     but sticking to YCbCr is generally better for video pipelines.
+        // For preprocessing with CoreImage, YCbCr formats might require manual conversion or specific handling in filters.
+        // Using BGRA can simplify CI processing but might involve an extra conversion step internally by AVFoundation or CI.
+        // Stick with YCbCr for now, assuming filters handle it or conversion is acceptable.
         let videoOutputSettings: [String: Any] = [
-            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange // Keep 10-bit for potential HDR
-            // kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA // Alternative for easier CI processing if HDR not needed
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange // Using 8-bit for wider CI compatibility, adjust if 10-bit is essential and handled
+            // kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA // Alternative for easier CI processing
         ]
         let videoOutput = AVAssetReaderTrackOutput(track: sourceVideoTrack, outputSettings: videoOutputSettings)
         videoOutput.alwaysCopiesSampleData = false // Important for performance
@@ -433,7 +433,7 @@ public class JMVideoCompressor {
                             } catch {
                                 // 전처리 중 에러 발생 시 기록하고 루프/작업 중단
                                 print("Error during noise reduction preprocessing: \(error)")
-                                preprocessingError = JMVideoCompressorError.preprocessingFailed(error)
+                                preprocessingError = error // Use the caught error directly
                             }
                         }
                         // --- End Preprocessing ---
@@ -441,7 +441,8 @@ public class JMVideoCompressor {
                         // 전처리 에러가 발생했으면 작업을 중단하고 에러를 전달
                         if let error = preprocessingError {
                             assetWriterInput.markAsFinished()
-                            safeResume(throwing: error)
+                            // Wrap the preprocessing error in our custom error type
+                            safeResume(throwing: JMVideoCompressorError.preprocessingFailed(error))
                             return
                         }
 
@@ -914,46 +915,44 @@ public class JMVideoCompressor {
         guard level != .none else { return sampleBuffer } // No processing needed
 
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
-            throw JMVideoCompressorError.preprocessingFailed(NSError(domain: "JMVideoCompressor", code: -10, userInfo: [NSLocalizedDescriptionKey: "Could not get CVPixelBuffer from CMSampleBuffer."]))
+            throw NSError(domain: "JMVideoCompressor", code: -10, userInfo: [NSLocalizedDescriptionKey: "Could not get CVPixelBuffer from CMSampleBuffer."])
         }
 
         // Create CIImage from the pixel buffer
         let sourceImage = CIImage(cvPixelBuffer: pixelBuffer)
 
         // Apply CINoiseReduction filter
-        // 필터 강도 조절 (level 값에 따라 noiseLevel, sharpness 조정)
         let noiseLevel: Float
         let sharpness: Float
         switch level {
         case .low: noiseLevel = 0.02; sharpness = 0.4
         case .medium: noiseLevel = 0.05; sharpness = 0.5
         case .high: noiseLevel = 0.1; sharpness = 0.6
-        case .none: return sampleBuffer // Should not happen due to guard above
+        case .none: return sampleBuffer // Should not happen
         }
 
         guard let noiseReductionFilter = CIFilter(name: "CINoiseReduction") else {
-             throw JMVideoCompressorError.preprocessingFailed(NSError(domain: "JMVideoCompressor", code: -11, userInfo: [NSLocalizedDescriptionKey: "Could not create CINoiseReduction filter."]))
+             throw NSError(domain: "JMVideoCompressor", code: -11, userInfo: [NSLocalizedDescriptionKey: "Could not create CINoiseReduction filter."])
         }
         noiseReductionFilter.setValue(sourceImage, forKey: kCIInputImageKey)
-        noiseReductionFilter.setValue(noiseLevel, forKey: "inputNoiseLevel") // 노이즈 레벨 설정
-        noiseReductionFilter.setValue(sharpness, forKey: "inputSharpness") // 선명도 설정
+        noiseReductionFilter.setValue(noiseLevel, forKey: "inputNoiseLevel")
+        noiseReductionFilter.setValue(sharpness, forKey: "inputSharpness")
 
         guard let outputImage = noiseReductionFilter.outputImage else {
-            throw JMVideoCompressorError.preprocessingFailed(NSError(domain: "JMVideoCompressor", code: -12, userInfo: [NSLocalizedDescriptionKey: "Failed to get output image from CINoiseReduction filter."]))
+            throw NSError(domain: "JMVideoCompressor", code: -12, userInfo: [NSLocalizedDescriptionKey: "Failed to get output image from CINoiseReduction filter."])
         }
 
         // --- Render output CIImage back to a CVPixelBuffer ---
-        // Create a new pixel buffer for the output, matching the input format if possible.
-        // Note: Rendering might change the pixel format if the context doesn't support the original.
-        // Consider creating a pixel buffer pool for efficiency if doing lots of processing.
         var processedPixelBuffer: CVPixelBuffer?
+        // Create attributes for the destination pixel buffer
         let attributes = [
-            kCVPixelBufferPixelFormatTypeKey: CVPixelBufferGetPixelFormatType(pixelBuffer),
+            kCVPixelBufferPixelFormatTypeKey: CVPixelBufferGetPixelFormatType(pixelBuffer), // Try to keep original format
             kCVPixelBufferWidthKey: CVPixelBufferGetWidth(pixelBuffer),
             kCVPixelBufferHeightKey: CVPixelBufferGetHeight(pixelBuffer),
             kCVPixelBufferIOSurfacePropertiesKey: [:] // Necessary for CI rendering target
         ] as CFDictionary
 
+        // Create the destination pixel buffer
         let status = CVPixelBufferCreate(kCFAllocatorDefault,
                                          CVPixelBufferGetWidth(pixelBuffer),
                                          CVPixelBufferGetHeight(pixelBuffer),
@@ -962,35 +961,42 @@ public class JMVideoCompressor {
                                          &processedPixelBuffer)
 
         guard status == kCVReturnSuccess, let finalPixelBuffer = processedPixelBuffer else {
-            throw JMVideoCompressorError.preprocessingFailed(NSError(domain: "JMVideoCompressor", code: -13, userInfo: [NSLocalizedDescriptionKey: "Failed to create destination CVPixelBuffer for rendering. Status: \(status)"]))
+            throw NSError(domain: "JMVideoCompressor", code: -13, userInfo: [NSLocalizedDescriptionKey: "Failed to create destination CVPixelBuffer for rendering. Status: \(status)"])
         }
 
-        // Render the filtered image into the new pixel buffer
-        // Use the pre-created ciContext for rendering
+        // Render the filtered image into the new pixel buffer using the class's CIContext
         self.ciContext.render(outputImage, to: finalPixelBuffer)
-
 
         // --- Create a new CMSampleBuffer with the processed pixel buffer ---
         var timingInfo = CMSampleTimingInfo()
         CMSampleBufferGetSampleTimingInfo(sampleBuffer, at: 0, timingInfoOut: &timingInfo)
 
-        guard let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer) else {
-             throw JMVideoCompressorError.preprocessingFailed(NSError(domain: "JMVideoCompressor", code: -14, userInfo: [NSLocalizedDescriptionKey: "Could not get format description from original sample buffer."]))
+        // *** ERROR FIX: Create a new format description based on the processed pixel buffer ***
+        var newFormatDescription: CMFormatDescription?
+        var videoFormatDescErr = CMVideoFormatDescriptionCreateForImageBuffer(
+            allocator: kCFAllocatorDefault,
+            imageBuffer: finalPixelBuffer, // Use the *processed* pixel buffer
+            formatDescriptionOut: &newFormatDescription
+        )
+
+        guard videoFormatDescErr == noErr, let validFormatDescription = newFormatDescription else {
+            throw NSError(domain: "JMVideoCompressor", code: -14, userInfo: [NSLocalizedDescriptionKey: "Could not create new CMVideoFormatDescription from processed pixel buffer. Error: \(videoFormatDescErr)"])
         }
 
-        // Create the new sample buffer
+        // Create the new sample buffer using the *new* format description
         var newSampleBuffer: CMSampleBuffer?
-        let err = CMSampleBufferCreateForImageBuffer(allocator: kCFAllocatorDefault,
-                                                       imageBuffer: finalPixelBuffer, // Use the processed buffer
-                                                       dataReady: true,
-                                                       makeDataReadyCallback: nil,
-                                                       refcon: nil,
-                                                       formatDescription: formatDescription, // Use original format description
-                                                       sampleTiming: &timingInfo, // Use original timing info
-                                                       sampleBufferOut: &newSampleBuffer)
+        let err = CMSampleBufferCreateReadyWithImageBuffer(
+            allocator: kCFAllocatorDefault,
+            imageBuffer: finalPixelBuffer, // Use the processed buffer
+            formatDescription: validFormatDescription, // Use the NEW format description
+            sampleTiming: &timingInfo, // Use original timing info
+            sampleBufferOut: &newSampleBuffer
+        )
 
+        // Check for the specific error code -12743 or any other error
         guard err == noErr, let createdBuffer = newSampleBuffer else {
-            throw JMVideoCompressorError.preprocessingFailed(NSError(domain: "JMVideoCompressor", code: -15, userInfo: [NSLocalizedDescriptionKey: "Failed to create new CMSampleBuffer after noise reduction. Error: \(err)"]))
+            // Include the specific error code in the error message for clarity
+            throw NSError(domain: "JMVideoCompressor", code: -15, userInfo: [NSLocalizedDescriptionKey: "Failed to create new CMSampleBuffer after noise reduction. Error: \(err)"])
         }
 
         return createdBuffer
