@@ -9,6 +9,8 @@ import AVFoundation
 import CoreMedia
 import CoreServices
 import VideoToolbox
+// CoreImage 임포트 추가
+import CoreImage
 
 // MARK: - Top-Level Public Enum
 
@@ -39,6 +41,11 @@ public enum VideoQuality {
             config.videoBitrate = 2_000_000
             config.fps = 30
             config.audioBitrate = 128_000
+            // HEVC 지원 시 HEVC 사용 추가 (개선 사항 반영)
+            if VideoCodec.hevc.isSupported() {
+                config.videoCodec = .hevc
+                // config.videoBitrate = 1_500_000 // Optional: Adjust bitrate for HEVC
+            }
         case .highQuality:
             config.scale = CGSize(width: 1920, height: -1) // Target max ~1080p height
             config.videoBitrate = 5_000_000
@@ -54,13 +61,23 @@ public enum VideoQuality {
              config.fps = 30
              config.audioBitrate = 128_000
              // config.preprocessing.autoLevels = true // Optional: Adjust levels
+             // HEVC 지원 시 HEVC 사용 추가 (개선 사항 반영)
+             if VideoCodec.hevc.isSupported() {
+                 config.videoCodec = .hevc
+                 // config.videoBitrate = 2_500_000 // Optional: Adjust bitrate for HEVC
+             }
         case .messaging:
-             config.scale = CGSize(width: 854, height: -1) // Target 480p height
-             config.videoBitrate = 1_000_000 // Lower bitrate
-             config.fps = 24
-             config.audioBitrate = 64_000
-             config.audioChannels = 1 // Mono often preferred
-             config.preprocessing.noiseReduction = .medium
+              config.scale = CGSize(width: 854, height: -1) // Target 480p height
+              config.videoBitrate = 1_000_000 // Lower bitrate
+              config.fps = 24
+              config.audioBitrate = 64_000
+              config.audioChannels = 1 // Mono often preferred
+              config.preprocessing.noiseReduction = .medium
+              // HEVC 지원 시 HEVC 사용 추가 (개선 사항 반영)
+              if VideoCodec.hevc.isSupported() {
+                  config.videoCodec = .hevc
+                  // config.videoBitrate = 700_000 // Optional: Adjust bitrate for HEVC
+              }
         }
         return config
     }
@@ -110,6 +127,11 @@ public class JMVideoCompressor {
     private weak var audioInput: AVAssetWriterInput? // Access synchronized via isolationQueue
     private var totalSourceTime: CMTime = .zero // Set once, read concurrently okay
 
+    // Core Image context for preprocessing (created lazily)
+    // CIContext 생성은 비용이 들 수 있으므로 클래스 멤버로 두고 재사용하는 것이 더 효율적입니다.
+    // 여기서는 간단하게 processTrack 내에서 lazy하게 생성합니다.
+    private lazy var ciContext: CIContext = CIContext(options: nil)
+
     // MARK: - Initialization
     public init() {}
 
@@ -125,13 +147,14 @@ public class JMVideoCompressor {
     ) async throws -> (url: URL, analytics: CompressionAnalytics) {
         var config = quality.defaultConfig
         config.outputDirectory = outputDirectory
+        // Pass the configuration to the main compression function
         return try await compressVideo(url, config: config, frameReducer: frameReducer, progressHandler: progressHandler)
     }
 
     /// Compresses the video at the given URL using custom configuration.
     public func compressVideo(
         _ url: URL,
-        config: CompressionConfig,
+        config: CompressionConfig, // config 파라미터 추가
         frameReducer: VideoFrameReducer = ReduceFrameEvenlySpaced(),
         progressHandler: ((Float) -> Void)? = nil
     ) async throws -> (url: URL, analytics: CompressionAnalytics) {
@@ -170,7 +193,7 @@ public class JMVideoCompressor {
         let sourceAudioSettings = try await loadSourceAudioSettings(track: sourceAudioTrack)
 
         let contentType = config.contentAwareOptimization ? detectContentType(videoTrack: sourceVideoTrack) : .standard
-        var effectiveConfig = config
+        var effectiveConfig = config // Use the passed config
         applyContentAwareOptimizations(to: &effectiveConfig, contentType: contentType)
 
         let targetFPS = min(effectiveConfig.fps, sourceVideoSettings.fps)
@@ -195,7 +218,6 @@ public class JMVideoCompressor {
             localWriter = try AVAssetWriter(url: outputURL, fileType: effectiveConfig.fileType)
         } catch {
             // Catch specific error if writer fails due to path issues (though determineOutputURL should prevent most)
-            // *** REMOVED check for AVError.cannotCreateFile ***
              if let nsError = error as NSError?, nsError.domain == AVFoundationErrorDomain, nsError.code == AVError.fileFormatNotRecognized.rawValue {
                  throw JMVideoCompressorError.invalidOutputPath(outputURL) // Map to our specific error
              }
@@ -211,11 +233,14 @@ public class JMVideoCompressor {
 
         // --- Configure Reader Outputs ---
         // *** CRITICAL FOR HDR: Use a 10-bit pixel format to preserve HDR data during reading ***
+        // *** For preprocessing with CoreImage, using BGRA might be simpler if HDR is not a primary concern,
+        //     but sticking to YCbCr is generally better for video pipelines.
         let videoOutputSettings: [String: Any] = [
-            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange // Keep 10-bit for potential HDR
+            // kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA // Alternative for easier CI processing if HDR not needed
         ]
         let videoOutput = AVAssetReaderTrackOutput(track: sourceVideoTrack, outputSettings: videoOutputSettings)
-        videoOutput.alwaysCopiesSampleData = false
+        videoOutput.alwaysCopiesSampleData = false // Important for performance
         guard localReader.canAdd(videoOutput) else {
             throw JMVideoCompressorError.compressionFailed(NSError(domain: "JMVideoCompressor", code: -2, userInfo: [NSLocalizedDescriptionKey: "Cannot add video reader output."]))
         }
@@ -274,11 +299,13 @@ public class JMVideoCompressor {
         // Use TaskGroup for concurrent processing of video and audio tracks
         try await withThrowingTaskGroup(of: Void.self) { group in
             group.addTask {
+                // Pass the effectiveConfig to processTrack for preprocessing options
                 try await self.processTrack(
                     assetWriterInput: videoInput,
                     readerOutput: videoOutput,
                     frameIndexesToKeep: frameIndexesToKeep,
-                    progressHandler: progressHandler // Pass progress handler
+                    progressHandler: progressHandler, // Pass progress handler
+                    config: effectiveConfig // Pass config
                 )
             }
             if let audioIn = audioInput, let audioOut = audioOutput {
@@ -287,7 +314,8 @@ public class JMVideoCompressor {
                         assetWriterInput: audioIn,
                         readerOutput: audioOut,
                         frameIndexesToKeep: nil, // No frame reduction for audio
-                        progressHandler: nil // Only report progress based on video track
+                        progressHandler: nil, // Only report progress based on video track
+                        config: effectiveConfig // Pass config (though not used for audio preprocessing here)
                     )
                 }
             }
@@ -342,17 +370,15 @@ public class JMVideoCompressor {
 
     // MARK: - Private Processing Logic
 
-    /// Processes samples for a single track (video or audio).
-    /// Throws an error if appending samples fails.
+    /// Processes samples for a single track (video or audio), including preprocessing.
+    /// Throws an error if appending samples fails or preprocessing fails.
     private func processTrack(
         assetWriterInput: AVAssetWriterInput,
         readerOutput: AVAssetReaderOutput,
         frameIndexesToKeep: [Int]?,
-        progressHandler: ((Float) -> Void)?
+        progressHandler: ((Float) -> Void)?,
+        config: CompressionConfig // Configuration needed for preprocessing options
     ) async throws { // Marked as throwing
-        // Create a state manager actor instance for this specific track processing task
-        // Removed actor state as direct processing on isolation queue is simpler
-        // let state = TrackProcessorState(frameIndexesToKeep: frameIndexesToKeep)
         var frameCounter: Int = 0
         var keepFrameIndicesIterator = frameIndexesToKeep?.makeIterator()
         var nextIndexToKeep: Int? = keepFrameIndicesIterator?.next()
@@ -363,7 +389,6 @@ public class JMVideoCompressor {
             var didResume = false // Flag to prevent double resumption
 
             // Function to safely resume the continuation exactly once
-            // Marked @Sendable as it's called from a concurrent queue's closure
             @Sendable func safeResume(throwing error: Error? = nil) {
                 if !didResume {
                     didResume = true
@@ -393,9 +418,35 @@ public class JMVideoCompressor {
 
                     // Read the next sample buffer
                     if let sampleBuffer = readerOutput.copyNextSampleBuffer() {
-                        var shouldAppend = true
+                        var bufferToAppend = sampleBuffer // 기본값은 원본 버퍼
+                        var preprocessingError: Error? = nil // 전처리 에러 저장 변수
+
+                        // --- Preprocessing Logic (Noise Reduction) ---
+                        // 오디오 트랙은 전처리하지 않음 (필요시 추가 가능)
+                        if assetWriterInput.mediaType == .video && config.preprocessing.noiseReduction != .none {
+                            do {
+                                // applyNoiseReduction 함수 호출 (아래 Helper Functions 참고)
+                                bufferToAppend = try self.applyNoiseReduction(
+                                    to: sampleBuffer,
+                                    level: config.preprocessing.noiseReduction
+                                )
+                            } catch {
+                                // 전처리 중 에러 발생 시 기록하고 루프/작업 중단
+                                print("Error during noise reduction preprocessing: \(error)")
+                                preprocessingError = JMVideoCompressorError.preprocessingFailed(error)
+                            }
+                        }
+                        // --- End Preprocessing ---
+
+                        // 전처리 에러가 발생했으면 작업을 중단하고 에러를 전달
+                        if let error = preprocessingError {
+                            assetWriterInput.markAsFinished()
+                            safeResume(throwing: error)
+                            return
+                        }
 
                         // --- Frame Reduction Logic ---
+                        var shouldAppend = true
                         if frameIndexesToKeep != nil {
                             if let targetIndex = nextIndexToKeep {
                                 if frameCounter == targetIndex {
@@ -413,12 +464,10 @@ public class JMVideoCompressor {
                         if shouldAppend {
                             // --- Progress Reporting ---
                             if let handler = progressHandler, self.totalSourceTime.seconds > 0 {
-                                let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+                                let pts = CMSampleBufferGetPresentationTimeStamp(bufferToAppend) // Use potentially modified buffer
                                 if pts.isValid {
                                     let progress = Float(pts.seconds / self.totalSourceTime.seconds)
-                                    // Update progress if changed significantly or final
                                     if progress >= lastProgressUpdate + 0.01 || progress >= 1.0 {
-                                        // Call handler on main thread for UI updates
                                         DispatchQueue.main.async {
                                             handler(min(max(progress, 0.0), 1.0))
                                         }
@@ -429,7 +478,8 @@ public class JMVideoCompressor {
                             // --- End Progress ---
 
                             // --- Append Buffer --- (Already on isolationQueue)
-                            if !assetWriterInput.append(sampleBuffer) {
+                            // 최종적으로 결정된 버퍼 (원본 또는 처리된 것)를 추가
+                            if !assetWriterInput.append(bufferToAppend) {
                                 let writerError = self.assetWriter?.error // Get writer error safely
                                 print("Error: Failed to append \(assetWriterInput.mediaType) buffer. Writer status: \(self.assetWriter?.status.rawValue ?? -1). Error: \(writerError?.localizedDescription ?? "unknown")")
                                 safeResume(throwing: JMVideoCompressorError.compressionFailed(writerError ?? NSError(domain: "JMVideoCompressor", code: -6, userInfo: [NSLocalizedDescriptionKey: "Failed to append sample buffer."])))
@@ -443,7 +493,7 @@ public class JMVideoCompressor {
                         // Send final progress update if needed
                         if let handler = progressHandler, lastProgressUpdate < 1.0 {
                              DispatchQueue.main.async {
-                                handler(1.0)
+                                 handler(1.0)
                              }
                         }
                         safeResume() // Resume after marking finished
@@ -570,12 +620,12 @@ public class JMVideoCompressor {
              print("Debug: Assigning default SDR ColorPrimaries: \(colorPrimaries!)")
         }
          if transferFunction == nil {
-             transferFunction = kCMFormatDescriptionTransferFunction_ITU_R_709_2 as String // Common SDR Default
-             print("Debug: Assigning default SDR TransferFunction: \(transferFunction!)")
+              transferFunction = kCMFormatDescriptionTransferFunction_ITU_R_709_2 as String // Common SDR Default
+              print("Debug: Assigning default SDR TransferFunction: \(transferFunction!)")
          }
          if yCbCrMatrix == nil {
-             yCbCrMatrix = kCMFormatDescriptionYCbCrMatrix_ITU_R_709_2 as String // Common SDR Default
-             print("Debug: Assigning default SDR YCbCrMatrix: \(yCbCrMatrix!)")
+              yCbCrMatrix = kCMFormatDescriptionYCbCrMatrix_ITU_R_709_2 as String // Common SDR Default
+              print("Debug: Assigning default SDR YCbCrMatrix: \(yCbCrMatrix!)")
          }
 
         return try await SourceVideoSettings(
@@ -610,14 +660,14 @@ public class JMVideoCompressor {
 
         var compressionProperties: [String: Any] = [
             AVVideoMaxKeyFrameIntervalKey: config.maxKeyFrameInterval,
-            AVVideoAllowFrameReorderingKey: false,
+            AVVideoAllowFrameReorderingKey: false, // Generally false for better compatibility
         ]
 
         // --- Determine HDR status ---
         let isHDR: Bool
         // Compare against known string values instead of potentially unavailable constants
         if source.colorPrimaries == (kCMFormatDescriptionColorPrimaries_ITU_R_2020 as String) ||
-           source.transferFunction == "ITU_R_2100_PQ" ||
+           source.transferFunction == "ITU_R_2100_PQ" || // Use string literals for PQ/HLG
            source.transferFunction == "ITU_R_2100_HLG" {
             isHDR = true
         } else {
@@ -627,7 +677,7 @@ public class JMVideoCompressor {
         let targetCodec = config.videoCodec
         var profileLevel: String? = nil
 
-        // --- Set Profile Level and HDR Metadata --- 
+        // --- Set Profile Level and HDR Metadata ---
         if isHDR {
             if targetCodec == .hevc {
                 // Restore HEVC Main10 AutoLevel for 10-bit HDR
@@ -647,11 +697,11 @@ public class JMVideoCompressor {
                  print("Warning: HDR metadata detected, but video codec is not HEVC. HDR information might be lost. Consider using .hevc codec.")
                  // Set profile for the non-HEVC codec (e.g., H.264)
                  if targetCodec == .h264 {
-                     profileLevel = AVVideoProfileLevelH264HighAutoLevel
-                     compressionProperties[AVVideoH264EntropyModeKey] = AVVideoH264EntropyModeCABAC
+                      profileLevel = AVVideoProfileLevelH264HighAutoLevel
+                      compressionProperties[AVVideoH264EntropyModeKey] = AVVideoH264EntropyModeCABAC
                  } else {
-                     // Handle other potential codecs if added later
-                     print("Warning: Unsupported codec for HDR passthrough: \(targetCodec)")
+                      // Handle other potential codecs if added later
+                      print("Warning: Unsupported codec for HDR passthrough: \(targetCodec)")
                  }
                  // Do not add HDR metadata properties for non-HEVC codecs
             }
@@ -671,14 +721,16 @@ public class JMVideoCompressor {
             compressionProperties[AVVideoProfileLevelKey] = level
         }
 
-        // --- Bitrate/Quality Settings (Same as before) ---
+        // --- Bitrate/Quality Settings ---
         if config.useExplicitBitrate {
             let minBitrate: Float = 50_000
             var effectiveBitrate = Float(config.videoBitrate)
+            // Don't let target bitrate exceed source bitrate too much (heuristic)
             if effectiveBitrate > source.bitrate * 1.2 { effectiveBitrate = max(source.bitrate * 0.8, minBitrate) }
             effectiveBitrate = max(effectiveBitrate, minBitrate)
             compressionProperties[AVVideoAverageBitRateKey] = Int(effectiveBitrate)
         } else {
+            // Quality key (0.0 - 1.0)
             compressionProperties[AVVideoQualityKey] = max(0.0, min(1.0, config.videoQuality))
         }
 
@@ -823,7 +875,10 @@ public class JMVideoCompressor {
         } else {
             // Estimate bitrate based on file size and duration if not explicitly set
             let duration = totalSourceTime.seconds // Use the loaded duration
-            compressedVideoBitrate = (duration > 0) ? Float(compressedFileSize * 8) / Float(duration) : 0
+            // Estimate video bitrate by subtracting estimated audio bitrate contribution
+            let audioContributionBps = (targetAudioSettings?[AVEncoderBitRateKey] as? NSNumber)?.floatValue ?? 0
+            let estimatedVideoSizeBytes = max(0, Float(compressedFileSize) - (audioContributionBps / 8.0 * Float(duration)))
+            compressedVideoBitrate = (duration > 0) ? (estimatedVideoSizeBytes * 8.0) / Float(duration) : 0
         }
 
         // Get compressed audio bitrate from target settings
@@ -847,6 +902,100 @@ public class JMVideoCompressor {
         catch { print("Warning: Could not get file size for \(url.path): \(error)"); return 0 }
     }
 
+    // MARK: - Preprocessing Helper Functions
+
+    /// Applies noise reduction using Core Image.
+    /// - Parameters:
+    ///   - sampleBuffer: The original video sample buffer.
+    ///   - level: The desired level of noise reduction.
+    /// - Returns: A new CMSampleBuffer containing the processed image data.
+    /// - Throws: An error if preprocessing fails.
+    private func applyNoiseReduction(to sampleBuffer: CMSampleBuffer, level: PreprocessingOptions.NoiseReductionLevel) throws -> CMSampleBuffer {
+        guard level != .none else { return sampleBuffer } // No processing needed
+
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+            throw JMVideoCompressorError.preprocessingFailed(NSError(domain: "JMVideoCompressor", code: -10, userInfo: [NSLocalizedDescriptionKey: "Could not get CVPixelBuffer from CMSampleBuffer."]))
+        }
+
+        // Create CIImage from the pixel buffer
+        let sourceImage = CIImage(cvPixelBuffer: pixelBuffer)
+
+        // Apply CINoiseReduction filter
+        // 필터 강도 조절 (level 값에 따라 noiseLevel, sharpness 조정)
+        let noiseLevel: Float
+        let sharpness: Float
+        switch level {
+        case .low: noiseLevel = 0.02; sharpness = 0.4
+        case .medium: noiseLevel = 0.05; sharpness = 0.5
+        case .high: noiseLevel = 0.1; sharpness = 0.6
+        case .none: return sampleBuffer // Should not happen due to guard above
+        }
+
+        guard let noiseReductionFilter = CIFilter(name: "CINoiseReduction") else {
+             throw JMVideoCompressorError.preprocessingFailed(NSError(domain: "JMVideoCompressor", code: -11, userInfo: [NSLocalizedDescriptionKey: "Could not create CINoiseReduction filter."]))
+        }
+        noiseReductionFilter.setValue(sourceImage, forKey: kCIInputImageKey)
+        noiseReductionFilter.setValue(noiseLevel, forKey: "inputNoiseLevel") // 노이즈 레벨 설정
+        noiseReductionFilter.setValue(sharpness, forKey: "inputSharpness") // 선명도 설정
+
+        guard let outputImage = noiseReductionFilter.outputImage else {
+            throw JMVideoCompressorError.preprocessingFailed(NSError(domain: "JMVideoCompressor", code: -12, userInfo: [NSLocalizedDescriptionKey: "Failed to get output image from CINoiseReduction filter."]))
+        }
+
+        // --- Render output CIImage back to a CVPixelBuffer ---
+        // Create a new pixel buffer for the output, matching the input format if possible.
+        // Note: Rendering might change the pixel format if the context doesn't support the original.
+        // Consider creating a pixel buffer pool for efficiency if doing lots of processing.
+        var processedPixelBuffer: CVPixelBuffer?
+        let attributes = [
+            kCVPixelBufferPixelFormatTypeKey: CVPixelBufferGetPixelFormatType(pixelBuffer),
+            kCVPixelBufferWidthKey: CVPixelBufferGetWidth(pixelBuffer),
+            kCVPixelBufferHeightKey: CVPixelBufferGetHeight(pixelBuffer),
+            kCVPixelBufferIOSurfacePropertiesKey: [:] // Necessary for CI rendering target
+        ] as CFDictionary
+
+        let status = CVPixelBufferCreate(kCFAllocatorDefault,
+                                         CVPixelBufferGetWidth(pixelBuffer),
+                                         CVPixelBufferGetHeight(pixelBuffer),
+                                         CVPixelBufferGetPixelFormatType(pixelBuffer),
+                                         attributes,
+                                         &processedPixelBuffer)
+
+        guard status == kCVReturnSuccess, let finalPixelBuffer = processedPixelBuffer else {
+            throw JMVideoCompressorError.preprocessingFailed(NSError(domain: "JMVideoCompressor", code: -13, userInfo: [NSLocalizedDescriptionKey: "Failed to create destination CVPixelBuffer for rendering. Status: \(status)"]))
+        }
+
+        // Render the filtered image into the new pixel buffer
+        // Use the pre-created ciContext for rendering
+        self.ciContext.render(outputImage, to: finalPixelBuffer)
+
+
+        // --- Create a new CMSampleBuffer with the processed pixel buffer ---
+        var timingInfo = CMSampleTimingInfo()
+        CMSampleBufferGetSampleTimingInfo(sampleBuffer, at: 0, timingInfoOut: &timingInfo)
+
+        guard let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer) else {
+             throw JMVideoCompressorError.preprocessingFailed(NSError(domain: "JMVideoCompressor", code: -14, userInfo: [NSLocalizedDescriptionKey: "Could not get format description from original sample buffer."]))
+        }
+
+        // Create the new sample buffer
+        var newSampleBuffer: CMSampleBuffer?
+        let err = CMSampleBufferCreateForImageBuffer(allocator: kCFAllocatorDefault,
+                                                       imageBuffer: finalPixelBuffer, // Use the processed buffer
+                                                       dataReady: true,
+                                                       makeDataReadyCallback: nil,
+                                                       refcon: nil,
+                                                       formatDescription: formatDescription, // Use original format description
+                                                       sampleTiming: &timingInfo, // Use original timing info
+                                                       sampleBufferOut: &newSampleBuffer)
+
+        guard err == noErr, let createdBuffer = newSampleBuffer else {
+            throw JMVideoCompressorError.preprocessingFailed(NSError(domain: "JMVideoCompressor", code: -15, userInfo: [NSLocalizedDescriptionKey: "Failed to create new CMSampleBuffer after noise reduction. Error: \(err)"]))
+        }
+
+        return createdBuffer
+    }
+
     // MARK: - Logging Helpers
     private func logCompressionStart(sourceURL: URL, outputURL: URL, config: CompressionConfig) {
        #if DEBUG
@@ -864,13 +1013,13 @@ public class JMVideoCompressor {
        print("""
        -------------------------------------
        JMVideoCompressor: Compression finished ✅
-         Output: \(outputURL.lastPathComponent)
-         Original Size: \(String(format: "%.2f MB", Double(analytics.originalFileSize) / (1024*1024)))
-         Compressed Size: \(String(format: "%.2f MB", Double(analytics.compressedFileSize) / (1024*1024)))
-         Ratio: \(String(format: "%.2f : 1", analytics.compressionRatio))
-         Time Elapsed: \(String(format: "%.2f seconds", analytics.processingTime))
-         Original Res: \(Int(analytics.originalDimensions.width))x\(Int(analytics.originalDimensions.height)) -> Compressed Res: \(Int(analytics.compressedDimensions.width))x\(Int(analytics.compressedDimensions.height))
-         Original Bitrate: \(String(format: "%.0f kbps", analytics.originalVideoBitrate / 1000)) -> Compressed Bitrate: \(String(format: "%.0f kbps", analytics.compressedVideoBitrate / 1000))
+        Output: \(outputURL.lastPathComponent)
+        Original Size: \(String(format: "%.2f MB", Double(analytics.originalFileSize) / (1024*1024)))
+        Compressed Size: \(String(format: "%.2f MB", Double(analytics.compressedFileSize) / (1024*1024)))
+        Ratio: \(String(format: "%.2f : 1", analytics.compressionRatio))
+        Time Elapsed: \(String(format: "%.2f seconds", analytics.processingTime))
+        Original Res: \(Int(analytics.originalDimensions.width))x\(Int(analytics.originalDimensions.height)) -> Compressed Res: \(Int(analytics.compressedDimensions.width))x\(Int(analytics.compressedDimensions.height))
+        Original Bitrate: \(String(format: "%.0f kbps", analytics.originalVideoBitrate / 1000)) -> Compressed Bitrate: \(String(format: "%.0f kbps", analytics.compressedVideoBitrate / 1000))
        -------------------------------------
        """)
        #endif

@@ -19,6 +19,7 @@ public enum JMVideoCompressorError: Error, LocalizedError {
     case underlyingError(Error)
     /// The selected video codec is not supported on the current device/OS.
     case codecNotSupported(VideoCodec) // Use the VideoCodec enum
+    case preprocessingFailed(Error)
 
     public var errorDescription: String? {
         switch self {
@@ -42,6 +43,8 @@ public enum JMVideoCompressorError: Error, LocalizedError {
             return "An underlying system error occurred: \(error.localizedDescription)"
         case .codecNotSupported(let codec):
             return "Video codec \(codec) is not supported on this device/OS."
+        case .preprocessingFailed(let error):
+            return "Video preprocessing failed: \(error.localizedDescription)"
         }
     }
 }
