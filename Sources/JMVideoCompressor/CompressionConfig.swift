@@ -104,11 +104,13 @@ public struct CompressionConfig: CustomStringConvertible {
     public var videoQuality: Float = 0.7
     public var maxKeyFrameInterval: Int = 30
     public var fps: Float = 30
-    /// 구체적인 크기 조절 설정. `maxLongerDimension`이 설정되면 무시됩니다.
+    /// 구체적인 크기 조절 설정. `maxLongerDimension` 또는 `forceVisualEncodingDimensions`가 설정되면 영향을 받거나 무시될 수 있습니다.
     public var scale: CGSize? = nil
-    /// **(신규)** 비디오의 긴 쪽(가로 또는 세로)의 최대 길이를 지정합니다. 설정되면 `scale` 값보다 우선 적용됩니다.
-    /// 예: 1920으로 설정하면, 가로 영상은 너비가 1920을 넘지 않고, 세로 영상은 높이가 1920을 넘지 않도록 비율을 유지하며 조절됩니다.
+    /// 비디오의 긴 쪽(가로 또는 세로)의 최대 길이를 지정합니다. 설정되면 `scale` 값보다 우선 적용됩니다.
     public var maxLongerDimension: CGFloat? = nil
+    /// **(신규)** `true`로 설정하면, 비디오를 시각적으로 보이는 방향과 크기(예: 세로 영상은 세로 해상도)로 직접 인코딩하고 회전 메타데이터를 제거합니다.
+    /// `false`(기본값)이면 원본 인코딩 방향을 유지하고 회전 메타데이터를 복사합니다.
+    public var forceVisualEncodingDimensions: Bool = false
 
     // MARK: - Audio Settings
     public var audioCodec: AudioCodecType = .aac
@@ -137,7 +139,7 @@ public struct CompressionConfig: CustomStringConvertible {
     public var description: String {
         var desc = "CompressionConfig:\n"
         desc += "  Video:\n"
-        desc += "    Codec: \(videoCodec)\n" // Use enum description
+        desc += "    Codec: \(videoCodec)\n"
         if useExplicitBitrate {
             desc += "    Bitrate: \(videoBitrate) bps\n"
         } else {
@@ -145,13 +147,25 @@ public struct CompressionConfig: CustomStringConvertible {
         }
         desc += "    Max Keyframe Interval: \(maxKeyFrameInterval)\n"
         desc += "    Target FPS: \(fps)\n"
-        // maxLongerDimension이 우선순위가 높음을 명시
-        if let maxDim = maxLongerDimension {
-             desc += "    Max Longer Dimension: \(maxDim) (Overrides scale)\n"
-        } else if let scaleDesc = scale {
-             desc += "    Scale: \(scaleDesc.debugDescription)\n"
+        // 크기 조절 설정 우선순위 반영
+        if forceVisualEncodingDimensions {
+            desc += "    Encoding Mode: Force Visual Dimensions (Overrides scale/maxLongerDimension for encoding size)\n"
+            if let maxDim = maxLongerDimension {
+                 desc += "    Max Longer Dimension Constraint: \(maxDim) (Applied before encoding)\n"
+            } else if let scaleDesc = scale {
+                 desc += "    Scale Constraint: \(scaleDesc.debugDescription) (Applied before encoding)\n"
+            } else {
+                 desc += "    Scale Constraint: Original (Applied before encoding)\n"
+            }
         } else {
-             desc += "    Scale: Original\n"
+            desc += "    Encoding Mode: Preserve Original Orientation\n"
+            if let maxDim = maxLongerDimension {
+                 desc += "    Max Longer Dimension: \(maxDim) (Overrides scale)\n"
+            } else if let scaleDesc = scale {
+                 desc += "    Scale: \(scaleDesc.debugDescription)\n"
+            } else {
+                 desc += "    Scale: Original\n"
+            }
         }
         desc += "  Audio:\n"
         desc += "    Codec: \(audioCodec)\n"
