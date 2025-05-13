@@ -9,7 +9,7 @@ A Swift library designed for efficient video compression on iOS and macOS using 
 * **Easy Presets:** Compress videos using predefined quality settings (`.lowQuality`, `.mediumQuality`, `.highQuality`, `.socialMedia`, `.messaging`).
 * **Custom Configuration:** Fine-tune compression with `CompressionConfig`, controlling codecs (H.264, HEVC), bitrate/quality, resolution scaling, frame rate, audio settings, and more.
 * **Codec Support:** Compress using H.264 or HEVC (H.265), with checks for HEVC hardware support.
-* **HDR Support:** Preserves High Dynamic Range (HDR) metadata (like HLG, PQ) when compressing to HEVC format on supported OS versions (iOS 16+/macOS 13+).
+* **HDR Support:** Aims to preserve High Dynamic Range (HDR) metadata (like HLG, PQ) when compressing to HEVC. Automatic HDR metadata insertion is supported on iOS 16+/macOS 13+. (See Requirements 섹션의 iOS 버전 관련 참고 사항).
 * **Frame Rate Reduction:** Reduce video frame rate using different strategies (e.g., evenly spaced, random selection).
 * **Asynchronous API:** Modern `async/await` syntax for non-blocking compression tasks.
 * **Progress Reporting:** Monitor compression progress via a closure.
@@ -19,7 +19,7 @@ A Swift library designed for efficient video compression on iOS and macOS using 
 
 ## Requirements
 
-* iOS 16.0+
+* iOS 15.0+ (Note: HEVC HDR metadata insertion is automatically handled on iOS 16.0+ and macOS 13.0+. On older versions, HEVC compression is available, but HDR metadata might not be preserved correctly.)
 * macOS 13.0+
 * Xcode 14.0+ (or a version compatible with Swift 5.7+)
 * Swift 5.7+
