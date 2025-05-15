@@ -119,6 +119,11 @@ public struct CompressionConfig: CustomStringConvertible {
     public var audioSampleRate: Int = 44100
     public var audioChannels: Int? = nil
 
+     /// 비디오 트리밍 시작 시간 (원본 비디오 기준). `nil`이면 처음부터 시작.
+    public var trimStartTime: CMTime? = nil
+    /// 비디오 트리밍 종료 시간 (원본 비디오 기준). `nil`이면 끝까지.
+    public var trimEndTime: CMTime? = nil
+
     // MARK: - Optimization Settings
     public var contentAwareOptimization: Bool = true
     public var preprocessing: PreprocessingOptions = PreprocessingOptions()
@@ -142,14 +147,13 @@ public struct CompressionConfig: CustomStringConvertible {
         if useExplicitBitrate {
             desc += "    Bitrate Mode: Explicit\n"
             desc += "    Target Max Bitrate: \(videoBitrate) bps\n"
-            desc += "    Use Adaptive Bitrate: \(useAdaptiveBitrate)\n" // 적응형 비트레이트 사용 여부 표시
+            desc += "    Use Adaptive Bitrate: \(useAdaptiveBitrate)\n"
         } else {
             desc += "    Bitrate Mode: Quality Based\n"
             desc += "    Target Quality: \(videoQuality)\n"
         }
         desc += "    Max Keyframe Interval: \(maxKeyFrameInterval)\n"
         desc += "    Target FPS: \(fps)\n"
-        // 크기 조절 설정 우선순위 반영
         if forceVisualEncodingDimensions {
             desc += "    Encoding Mode: Force Visual Dimensions (Overrides scale/maxLongerDimension for encoding size)\n"
             if let maxDim = maxLongerDimension {
@@ -174,6 +178,20 @@ public struct CompressionConfig: CustomStringConvertible {
         desc += "    Bitrate: \(audioBitrate) bps\n"
         desc += "    Sample Rate: \(audioSampleRate) Hz\n"
         desc += "    Channels: \(audioChannels?.description ?? "Source")\n"
+
+        // 트리밍 설정 설명 추가
+        desc += "  Trimming:\n"
+        if let startTime = trimStartTime {
+            desc += "    Start Time: \(CMTimeGetSeconds(startTime))s\n"
+        } else {
+            desc += "    Start Time: Beginning\n"
+        }
+        if let endTime = trimEndTime {
+            desc += "    End Time: \(CMTimeGetSeconds(endTime))s\n"
+        } else {
+            desc += "    End Time: End of video\n"
+        }
+
         desc += "  Optimization:\n"
         desc += "    Content Aware: \(contentAwareOptimization)\n"
         desc += "    Preprocessing Noise: \(preprocessing.noiseReduction), AutoLevels: \(preprocessing.autoLevels)\n"

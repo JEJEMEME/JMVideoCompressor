@@ -104,19 +104,18 @@ public class JMVideoCompressor {
     private var startTime: Date?
     private weak var videoInput: AVAssetWriterInput?
     private weak var audioInput: AVAssetWriterInput?
-    private var totalSourceTime: CMTime = .zero
+    private var totalSourceTime: CMTime = .zero // 압축할 (트리밍된) 세그먼트의 총 시간
+    private var effectiveTrimStartTime: CMTime = .zero // 진행률 계산을 위한 트리밍 시작 시간 저장
 
     // MARK: - Initialization
     public init() {}
 
     // MARK: - Public API
-
-    /// Compresses the video at the given URL using a quality preset.
     public func compressVideo(
         _ url: URL,
         quality: VideoQuality = .mediumQuality,
         frameReducer: VideoFrameReducer = ReduceFrameEvenlySpaced(),
-        outputDirectory: URL? = nil, // Deprecated
+        outputDirectory: URL? = nil,
         progressHandler: ((Float) -> Void)? = nil
     ) async throws -> (url: URL, analytics: CompressionAnalytics) {
         var config = quality.defaultConfig
@@ -124,10 +123,11 @@ public class JMVideoCompressor {
             config.outputDirectory = explicitOutputDir
             config.outputURL = nil
         }
+        // 이 메서드는 CompressionConfig의 trimStartTime, trimEndTime을 사용하지 않음.
+        // 트리밍을 원하면 config를 직접 전달하는 compressVideo 메서드를 사용해야 함.
         return try await compressVideo(url, config: config, frameReducer: frameReducer, progressHandler: progressHandler)
     }
 
-    /// Compresses the video at the given URL using custom configuration.
     public func compressVideo(
         _ url: URL,
         config: CompressionConfig,
@@ -135,7 +135,6 @@ public class JMVideoCompressor {
         progressHandler: ((Float) -> Void)? = nil
     ) async throws -> (url: URL, analytics: CompressionAnalytics) {
 
-        // Reset state
         isolationQueue.sync {
              self.cancelled = false
              self.startTime = Date()
@@ -143,21 +142,60 @@ public class JMVideoCompressor {
              self.assetWriter = nil
              self.videoInput = nil
              self.audioInput = nil
-             // totalSourceTime is reset below
+             self.effectiveTrimStartTime = .zero // 초기화
         }
 
-        // Input Validation & Codec Check
         guard url.isFileURL, FileManager.default.fileExists(atPath: url.path) else { throw JMVideoCompressorError.invalidSourceURL(url) }
         guard config.videoCodec.isSupported() else { throw JMVideoCompressorError.codecNotSupported(config.videoCodec) }
 
         let sourceAsset = AVURLAsset(url: url, options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
-        self.totalSourceTime = try await sourceAsset.load(.duration)
+        let originalAssetDuration = try await sourceAsset.load(.duration)
 
-        // Load Tracks
+        // --- Trimming Logic ---
+        var effectiveTimeRange = CMTimeRange(start: .zero, duration: originalAssetDuration)
+        var isTrimmed = false
+
+        let trimStart = config.trimStartTime
+        let trimEnd = config.trimEndTime
+
+        if let start = trimStart, let end = trimEnd {
+            guard CMTimeCompare(start, end) == -1, // start < end
+                  CMTimeCompare(start, .zero) >= 0, // start >= 0
+                  CMTimeCompare(end, originalAssetDuration) <= 0 // end <= originalAssetDuration
+            else {
+                throw JMVideoCompressorError.invalidTrimTimes("Trim start time (\(CMTimeGetSeconds(start))s) must be before trim end time (\(CMTimeGetSeconds(end))s) and both must be within asset duration (0-\(CMTimeGetSeconds(originalAssetDuration))s).")
+            }
+            effectiveTimeRange = CMTimeRangeFromTimeToTime(start: start, end: end)
+            isTrimmed = true
+        } else if let start = trimStart {
+            guard CMTimeCompare(start, .zero) >= 0, // start >= 0
+                  CMTimeCompare(start, originalAssetDuration) == -1 // start < originalAssetDuration
+            else {
+                throw JMVideoCompressorError.invalidTrimTimes("Trim start time (\(CMTimeGetSeconds(start))s) must be within asset duration (0-\(CMTimeGetSeconds(originalAssetDuration))s).")
+            }
+            effectiveTimeRange = CMTimeRange(start: start, duration: CMTimeSubtract(originalAssetDuration, start))
+            isTrimmed = true
+        } else if let end = trimEnd {
+            guard CMTimeCompare(end, .zero) == 1, // end > 0
+                  CMTimeCompare(end, originalAssetDuration) <= 0 // end <= originalAssetDuration
+            else {
+                throw JMVideoCompressorError.invalidTrimTimes("Trim end time (\(CMTimeGetSeconds(end))s) must be greater than zero and within asset duration (0-\(CMTimeGetSeconds(originalAssetDuration))s).")
+            }
+            effectiveTimeRange = CMTimeRange(start: .zero, duration: end)
+            isTrimmed = true
+        }
+        
+        self.totalSourceTime = effectiveTimeRange.duration // 진행률 및 분석에 사용될 총 시간
+        self.effectiveTrimStartTime = effectiveTimeRange.start // 진행률 계산 시 PTS 오프셋으로 사용
+        if isTrimmed {
+            print("JMVideoCompressor: Applying trim. Effective range: \(CMTimeGetSeconds(effectiveTimeRange.start))s - \(CMTimeGetSeconds(CMTimeAdd(effectiveTimeRange.start, effectiveTimeRange.duration)))s. Duration: \(CMTimeGetSeconds(effectiveTimeRange.duration))s")
+        }
+        // --- End Trimming Logic ---
+
+
         guard let sourceVideoTrack = try? await sourceAsset.loadTracks(withMediaType: .video).first else { throw JMVideoCompressorError.missingVideoTrack }
         let sourceAudioTrack = try? await sourceAsset.loadTracks(withMediaType: .audio).first
 
-        // Calculate Settings
         let sourceVideoSettings = try await loadSourceVideoSettings(track: sourceVideoTrack)
         let sourceAudioSettings = try await loadSourceAudioSettings(track: sourceAudioTrack)
 
@@ -168,18 +206,14 @@ public class JMVideoCompressor {
         let targetFPS = min(effectiveConfig.fps, sourceVideoSettings.fps)
         let needsFrameReduction = targetFPS < sourceVideoSettings.fps
 
-        // --- 여기가 중요: createTargetVideoSettings 호출 시 config 전달 ---
         let (targetVideoSettings, finalTransform) = try createTargetVideoSettings(config: effectiveConfig, source: sourceVideoSettings)
         let targetAudioSettings = try createTargetAudioSettings(config: effectiveConfig, source: sourceAudioSettings)
 
-        // Determine Output URL
         let outputURL = try determineOutputURL(config: effectiveConfig, sourceURL: url)
 
-        // Setup Reader & Writer
         let localReader: AVAssetReader
         let localWriter: AVAssetWriter
         defer {
-            // Ensure cleanup happens even if initialization fails partially
             isolationQueue.sync {
                 self.assetReader?.cancelReading()
                 self.assetWriter?.cancelWriting()
@@ -191,12 +225,17 @@ public class JMVideoCompressor {
              print("JMVideoCompressor: Deferred cleanup executed.")
         }
         do { localReader = try AVAssetReader(asset: sourceAsset) } catch { throw JMVideoCompressorError.readerInitializationFailed(error) }
+        
+        // 트리밍 설정 적용
+        if isTrimmed || CMTimeCompare(effectiveTimeRange.start, .zero) != 0 || CMTimeCompare(effectiveTimeRange.duration, originalAssetDuration) != 0 {
+            localReader.timeRange = effectiveTimeRange
+        }
+
         do { localWriter = try AVAssetWriter(url: outputURL, fileType: effectiveConfig.fileType) } catch { throw JMVideoCompressorError.writerInitializationFailed(error) }
         localWriter.shouldOptimizeForNetworkUse = true
         isolationQueue.sync { self.assetReader = localReader; self.assetWriter = localWriter }
 
-        // Configure Reader Outputs
-        let videoOutputSettings: [String: Any] = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange]
+        let videoOutputSettings: [String: Any] = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange] // 실제 지원하는 포맷으로 변경 필요할 수 있음
         let videoOutput = AVAssetReaderTrackOutput(track: sourceVideoTrack, outputSettings: videoOutputSettings)
         videoOutput.alwaysCopiesSampleData = false
         guard localReader.canAdd(videoOutput) else { throw JMVideoCompressorError.compressionFailed(NSError(domain: "JMVideoCompressor", code: -2, userInfo: [NSLocalizedDescriptionKey: "Cannot add video reader output."])) }
@@ -214,10 +253,9 @@ public class JMVideoCompressor {
              else { print("Warning: Could not add audio reader output.") }
         }
 
-        // --- Configure Writer Inputs ---
         let videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: targetVideoSettings)
         videoInput.expectsMediaDataInRealTime = false
-        videoInput.transform = finalTransform // 계산된 transform 적용
+        videoInput.transform = finalTransform
         guard localWriter.canAdd(videoInput) else { throw JMVideoCompressorError.compressionFailed(NSError(domain: "JMVideoCompressor", code: -3, userInfo: [NSLocalizedDescriptionKey: "Cannot add video writer input."])) }
         localWriter.add(videoInput)
         isolationQueue.sync { self.videoInput = videoInput }
@@ -236,14 +274,20 @@ public class JMVideoCompressor {
              }
         }
 
-        // Start Compression
         logCompressionStart(sourceURL: url, outputURL: outputURL, config: effectiveConfig)
-        guard localReader.startReading() else { throw JMVideoCompressorError.readerInitializationFailed(localReader.error) }
-        guard localWriter.startWriting() else { throw JMVideoCompressorError.writerInitializationFailed(localWriter.error) }
-        localWriter.startSession(atSourceTime: .zero)
+        guard localReader.startReading() else {
+            if let error = localReader.error { throw JMVideoCompressorError.readerInitializationFailed(error) }
+            throw JMVideoCompressorError.readerInitializationFailed(nil)
+        }
+        guard localWriter.startWriting() else {
+            if let error = localWriter.error { throw JMVideoCompressorError.writerInitializationFailed(error) }
+            throw JMVideoCompressorError.writerInitializationFailed(nil)
+        }
+        // 세션 시작 시간을 트리밍된 세그먼트의 시작 시간으로 설정
+        localWriter.startSession(atSourceTime: effectiveTimeRange.start)
 
-        // Process Samples Asynchronously
-        let frameIndexesToKeep = needsFrameReduction ? frameReducer.reduce(originalFPS: sourceVideoSettings.fps, to: targetFPS, with: Float(totalSourceTime.seconds)) : nil
+
+        let frameIndexesToKeep = needsFrameReduction ? frameReducer.reduce(originalFPS: sourceVideoSettings.fps, to: targetFPS, with: Float(self.totalSourceTime.seconds)) : nil
         try await withThrowingTaskGroup(of: Void.self) { group in
              group.addTask {
                  try await self.processTrack(
@@ -259,14 +303,13 @@ public class JMVideoCompressor {
                          assetWriterInput: audioIn,
                          readerOutput: audioOut,
                          frameIndexesToKeep: nil,
-                         progressHandler: nil
+                         progressHandler: nil // 오디오 트랙은 별도 진행률 보고 안 함
                      )
                  }
              }
              try await group.waitForAll()
         }
 
-        // Finish Writing
         if isolationQueue.sync(execute: { self.cancelled }) {
              localWriter.cancelWriting()
              try? FileManager.default.removeItem(at: outputURL)
@@ -279,13 +322,15 @@ public class JMVideoCompressor {
                 let analytics = try await gatherAnalytics(
                     originalURL: url, compressedURL: outputURL,
                     sourceVideoSettings: sourceVideoSettings, sourceAudioSettings: sourceAudioSettings,
-                    targetVideoSettings: targetVideoSettings, targetAudioSettings: targetAudioSettings
+                    targetVideoSettings: targetVideoSettings, targetAudioSettings: targetAudioSettings,
+                    // totalSourceTime은 이미 멤버 변수로 트리밍된 길이를 가짐
+                    trimmedDuration: self.totalSourceTime
                 )
                 logCompressionEnd(outputURL: outputURL, analytics: analytics)
                 return (outputURL, analytics)
             case .failed:
                  try? FileManager.default.removeItem(at: outputURL)
-                 throw JMVideoCompressorError.compressionFailed(localWriter.error ?? NSError(domain: "JMVideoCompressor", code: -4, userInfo: [NSLocalizedDescriptionKey: "Writer finished with failed status."]))
+                 throw JMVideoCompressorError.compressionFailed(localWriter.error)
              case .cancelled:
                   try? FileManager.default.removeItem(at: outputURL)
                   throw JMVideoCompressorError.cancelled
@@ -296,12 +341,14 @@ public class JMVideoCompressor {
         }
     }
 
-    /// Cancels the current compression operation.
     public func cancel() {
         isolationQueue.sync {
             guard !self.cancelled else { return }
             self.cancelled = true
-            print("JMVideoCompressor: Cancellation requested. Deferred cleanup will handle resource release.")
+            // 실제 취소 로직은 processTrack 내부 및 reader/writer 상태 확인으로 처리됨
+            self.assetReader?.cancelReading()
+            self.assetWriter?.cancelWriting()
+            print("JMVideoCompressor: Cancellation requested.")
         }
     }
 
@@ -317,9 +364,11 @@ public class JMVideoCompressor {
         var nextIndexToKeep: Int? = keepFrameIndicesIterator?.next()
         var lastProgressUpdate: Float = -1.0
 
+        // self.effectiveTrimStartTime 을 사용하여 PTS 조정
+        let trimOffsetTime = self.effectiveTrimStartTime
+
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) -> Void in
             var didResume = false
-
             @Sendable func safeResume(throwing error: Error? = nil) {
                 if !didResume {
                     didResume = true
@@ -332,53 +381,68 @@ public class JMVideoCompressor {
                 guard let self = self else { safeResume(); return }
 
                 while assetWriterInput.isReadyForMoreMediaData && !self.cancelled {
+                     // 루프 시작 시 취소 상태 확인
                     if self.cancelled {
-                        assetWriterInput.markAsFinished()
+                        assetWriterInput.markAsFinished() // writer input을 완료 처리
                         safeResume(throwing: JMVideoCompressorError.cancelled)
                         return
                     }
 
-                    if let sampleBuffer = readerOutput.copyNextSampleBuffer() {
-                        var shouldAppend = true
-                        if frameIndexesToKeep != nil {
-                            if let targetIndex = nextIndexToKeep {
-                                if frameCounter == targetIndex { nextIndexToKeep = keepFrameIndicesIterator?.next() }
-                                else { shouldAppend = false }
-                            } else { shouldAppend = false }
-                            frameCounter += 1
-                        }
-
-                        if shouldAppend {
-                            if let handler = progressHandler, self.totalSourceTime.seconds > 0 {
-                                let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-                                if pts.isValid {
-                                    let progress = Float(pts.seconds / self.totalSourceTime.seconds)
-                                    if progress >= lastProgressUpdate + 0.01 || progress >= 1.0 {
-                                        DispatchQueue.main.async { handler(min(max(progress, 0.0), 1.0)) }
-                                        lastProgressUpdate = progress
-                                    }
-                                }
-                            }
-
-                            if !assetWriterInput.append(sampleBuffer) {
-                                let writerError = self.assetWriter?.error
-                                print("Error: Failed to append \(assetWriterInput.mediaType) buffer. Writer status: \(self.assetWriter?.status.rawValue ?? -1). Error: \(writerError?.localizedDescription ?? "unknown")")
-                                safeResume(throwing: JMVideoCompressorError.compressionFailed(writerError ?? NSError(domain: "JMVideoCompressor", code: -6, userInfo: [NSLocalizedDescriptionKey: "Failed to append sample buffer."])))
-                                return
-                            }
-                        }
-                    } else {
+                    guard let sampleBuffer = readerOutput.copyNextSampleBuffer() else {
+                        // 샘플 버퍼가 더 이상 없으면 완료
                         assetWriterInput.markAsFinished()
-                        if let handler = progressHandler, lastProgressUpdate < 1.0 {
-                             DispatchQueue.main.async { handler(1.0) }
+                        if let handler = progressHandler, lastProgressUpdate < 1.0, self.totalSourceTime.seconds > 0 {
+                             DispatchQueue.main.async { handler(1.0) } // 마지막으로 100% 업데이트
                         }
                         safeResume()
                         return
                     }
+
+                    var shouldAppend = true
+                    if frameIndexesToKeep != nil { // 비디오 트랙이고 프레임 감소가 필요한 경우
+                        if let targetIndex = nextIndexToKeep {
+                            if frameCounter == targetIndex {
+                                nextIndexToKeep = keepFrameIndicesIterator?.next()
+                            } else {
+                                shouldAppend = false
+                            }
+                        } else { // 모든 필요한 프레임을 이미 처리함
+                            shouldAppend = false
+                        }
+                        frameCounter += 1
+                    }
+
+                    if shouldAppend {
+                        // 진행률 업데이트 (비디오 트랙에 대해서만)
+                        if assetWriterInput.mediaType == .video, let handler = progressHandler, self.totalSourceTime.seconds > 0 {
+                            let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+                            if pts.isValid {
+                                // PTS를 트리밍된 세그먼트의 시작 시간 기준으로 조정
+                                let relativePts = CMTimeSubtract(pts, trimOffsetTime)
+                                let progress = Float(CMTimeGetSeconds(relativePts) / CMTimeGetSeconds(self.totalSourceTime))
+                                
+                                // 진행률이 실제로 변경되었을 때만 업데이트 (0.01 단위) 또는 완료 시
+                                if progress >= lastProgressUpdate + 0.01 || (progress >= 1.0 && lastProgressUpdate < 1.0) {
+                                    DispatchQueue.main.async { handler(min(max(progress, 0.0), 1.0)) }
+                                    lastProgressUpdate = progress
+                                }
+                            }
+                        }
+
+                        if !assetWriterInput.append(sampleBuffer) {
+                            let writerError = self.assetWriter?.error
+                            print("Error: Failed to append \(assetWriterInput.mediaType) buffer. Writer status: \(self.assetWriter?.status.rawValue ?? -1). Error: \(writerError?.localizedDescription ?? "unknown")")
+                            safeResume(throwing: JMVideoCompressorError.compressionFailed(writerError ?? NSError(domain: "JMVideoCompressor", code: -6, userInfo: [NSLocalizedDescriptionKey: "Failed to append sample buffer."])))
+                            return
+                        }
+                    }
                 }
+                // 루프 종료 후에도 isReadyForMoreMediaData가 false가 될 수 있으므로, 여기서 완료를 알리지 않음.
+                // 샘플이 고갈되거나(nil 반환) 취소될 때 완료를 알림.
             }
         }
     }
+
 
     // MARK: - Private Configuration & Setup Helpers
     private func determineOutputURL(config: CompressionConfig, sourceURL: URL) throws -> URL {
@@ -389,26 +453,23 @@ public class JMVideoCompressor {
         if let specificURL = config.outputURL {
             finalURL = specificURL
             directoryToCheck = finalURL.deletingLastPathComponent()
-            if !fileManager.fileExists(atPath: directoryToCheck.path) {
-                do { try fileManager.createDirectory(at: directoryToCheck, withIntermediateDirectories: true, attributes: nil) }
-                catch { throw JMVideoCompressorError.invalidOutputPath(directoryToCheck) }
-            }
         } else {
             let baseDirectory = config.outputDirectory ?? fileManager.temporaryDirectory
             let uniqueFilename = UUID().uuidString + "." + config.fileType.preferredFilenameExtension
             finalURL = baseDirectory.appendingPathComponent(uniqueFilename)
             directoryToCheck = baseDirectory
-            if !fileManager.fileExists(atPath: directoryToCheck.path) {
-                do { try fileManager.createDirectory(at: directoryToCheck, withIntermediateDirectories: true, attributes: nil) }
-                catch { throw JMVideoCompressorError.invalidOutputPath(directoryToCheck) }
-            }
         }
 
+        if !fileManager.fileExists(atPath: directoryToCheck.path) {
+            do { try fileManager.createDirectory(at: directoryToCheck, withIntermediateDirectories: true, attributes: nil) }
+            catch { throw JMVideoCompressorError.invalidOutputPath(directoryToCheck) }
+        }
+        
         var isDirectory: ObjCBool = false
         guard fileManager.fileExists(atPath: directoryToCheck.path, isDirectory: &isDirectory), isDirectory.boolValue else {
             throw JMVideoCompressorError.invalidOutputPath(directoryToCheck)
         }
-        try? fileManager.removeItem(at: finalURL)
+        try? fileManager.removeItem(at: finalURL) // 기존 파일 삭제
         return finalURL
     }
 
@@ -444,9 +505,8 @@ public class JMVideoCompressor {
                 transferFunction = getStringValue(for: kCMFormatDescriptionExtension_TransferFunction)
                 yCbCrMatrix = getStringValue(for: kCMFormatDescriptionExtension_YCbCrMatrix)
             }
-        } catch { print("Error loading format descriptions: \(error)") }
+        } catch { print("Warning: Error loading format descriptions: \(error.localizedDescription)") }
 
-        // Assign default SDR values if reading failed
         if colorPrimaries == nil { colorPrimaries = kCMFormatDescriptionColorPrimaries_ITU_R_709_2 as String }
         if transferFunction == nil { transferFunction = kCMFormatDescriptionTransferFunction_ITU_R_709_2 as String }
         if yCbCrMatrix == nil { yCbCrMatrix = kCMFormatDescriptionYCbCrMatrix_ITU_R_709_2 as String }
@@ -469,16 +529,19 @@ public class JMVideoCompressor {
         async let bitrate = track.load(.estimatedDataRate)
         async let formatDescriptions = track.load(.formatDescriptions)
         var sampleRate: Float = 44100; var channels: Int = 2; var formatID: FourCharCode = 0
-        if let formatDesc = try await formatDescriptions.first,
-           let streamDesc = CMAudioFormatDescriptionGetStreamBasicDescription(formatDesc)?.pointee {
-            sampleRate = Float(streamDesc.mSampleRate); channels = Int(streamDesc.mChannelsPerFrame); formatID = streamDesc.mFormatID
+        
+        do {
+            if let formatDesc = try await formatDescriptions.first,
+               let streamDesc = CMAudioFormatDescriptionGetStreamBasicDescription(formatDesc)?.pointee {
+                sampleRate = Float(streamDesc.mSampleRate); channels = Int(streamDesc.mChannelsPerFrame); formatID = streamDesc.mFormatID
+            }
+        } catch {
+             print("Warning: Could not load audio format descriptions. Using defaults. Error: \(error.localizedDescription)")
         }
         return try await SourceAudioSettings(bitrate: bitrate, sampleRate: sampleRate, channels: channels, formatID: formatID)
     }
 
-    /// Creates the video output settings dictionary and the appropriate transform.
     private func createTargetVideoSettings(config: CompressionConfig, source: SourceVideoSettings) throws -> (settings: [String: Any], transform: CGAffineTransform) {
-        // 1. Calculate the desired *visual* output size
         let targetVisualSize = calculateTargetSize(
             scale: config.scale,
             maxLongerDimension: config.maxLongerDimension,
@@ -486,7 +549,6 @@ public class JMVideoCompressor {
             sourceTransform: source.transform
         )
 
-        // 2. Determine encoding dimensions and transform
         let finalEncodingWidth: CGFloat
         let finalEncodingHeight: CGFloat
         let finalTransform: CGAffineTransform
@@ -507,61 +569,37 @@ public class JMVideoCompressor {
             finalTransform = source.transform
         }
 
-        // 3. Prepare compression properties
         var compressionProperties: [String: Any] = [
             AVVideoMaxKeyFrameIntervalKey: config.maxKeyFrameInterval,
-            AVVideoAllowFrameReorderingKey: false,
+            AVVideoAllowFrameReorderingKey: false, // 일반적으로 false로 설정
         ]
 
-        // --- 비트레이트 설정 로직 수정 ---
         if config.useExplicitBitrate {
-            let minBitrate: Float = 50_000 // 최소 비트레이트 설정
-            var targetBitrate = Float(config.videoBitrate) // 사용자가 지정한 최대 목표 비트레이트
+            let minBitrate: Float = 50_000
+            var targetBitrate = Float(config.videoBitrate)
 
-            // 적응형 비트레이트 사용 시
-            if config.useAdaptiveBitrate && source.bitrate > 0 { // 원본 비트레이트가 유효할 때
+            if config.useAdaptiveBitrate && source.bitrate > 0 {
                 if source.bitrate < targetBitrate {
-                    // 원본 비트레이트가 목표보다 낮으면 원본 비트레이트를 목표로 사용 (단, 최소값 이상)
                     targetBitrate = max(source.bitrate, minBitrate)
-                    print("Info: Adaptive bitrate enabled. Using source bitrate (\(source.bitrate)) as target (capped at min: \(minBitrate)).")
                 } else {
-                    // 원본 비트레이트가 목표보다 높거나 같으면, 목표 비트레이트를 사용
-                    // (단, 원본 비트레이트의 1.2배를 넘지 않도록 하는 기존 로직은 유지하거나 제거/수정 가능 - 여기서는 유지)
-                    if targetBitrate > source.bitrate * 1.2 {
-                        targetBitrate = max(source.bitrate * 0.8, minBitrate) // 원본의 80% 또는 최소값
-                        print("Info: Adaptive bitrate enabled. Target bitrate (\(config.videoBitrate)) capped near source bitrate (\(source.bitrate)). New target: \(targetBitrate)")
-                    } else {
-                         print("Info: Adaptive bitrate enabled. Using user-specified target bitrate (\(targetBitrate)) as it's lower than source.")
-                    }
+                    // 기존 로직 유지 또는 수정 가능. 여기서는 사용자가 지정한 비트레이트가 소스보다 낮으면 그대로 사용.
+                    // 만약 사용자가 지정한 비트레이트가 소스보다 너무 높다면, 소스 비트레이트 근처로 제한할 수 있음.
+                    // 예: if targetBitrate > source.bitrate * 1.2 { targetBitrate = source.bitrate }
                 }
-            } else {
-                 // 적응형 비트레이트를 사용하지 않거나 원본 비트레이트 정보가 없을 경우, 기존 로직 사용
-                 if targetBitrate > source.bitrate * 1.2 && source.bitrate > 0 {
-                     targetBitrate = max(source.bitrate * 0.8, minBitrate)
-                 }
+            } else if source.bitrate > 0 && targetBitrate > source.bitrate * 1.2 { // 적응형 비트레이트 false일 때
+                 targetBitrate = max(source.bitrate * 0.8, minBitrate) // 너무 높은 목표 비트레이트 방지
             }
-
-            // 최종적으로 최소 비트레이트 보장
+            
             let effectiveBitrate = max(targetBitrate, minBitrate)
             compressionProperties[AVVideoAverageBitRateKey] = Int(effectiveBitrate)
-            print("Final Effective Video Bitrate: \(effectiveBitrate) bps")
-
-        } else { // 품질 기반 설정
-            compressionProperties[AVVideoQualityKey] = max(0.0, min(1.0, config.videoQuality))
-            print("Using Quality-Based Video Setting: \(config.videoQuality)")
-        }
-        // --- 비트레이트 설정 로직 끝 ---
-
-
-        // ... (기존의 profileLevel, isHDR 설정 로직) ...
-        let isHDR: Bool
-        if source.colorPrimaries == (kCMFormatDescriptionColorPrimaries_ITU_R_2020 as String) ||
-           source.transferFunction == "ITU_R_2100_PQ" ||
-           source.transferFunction == "ITU_R_2100_HLG" {
-            isHDR = true
         } else {
-            isHDR = false
+            compressionProperties[AVVideoQualityKey] = max(0.0, min(1.0, config.videoQuality))
         }
+        
+        let isHDR: Bool = (source.colorPrimaries == (kCMFormatDescriptionColorPrimaries_ITU_R_2020 as String) ||
+                           source.transferFunction == "ITU_R_2100_PQ" || // kCMFormatDescriptionTransferFunction_ITU_R_2100_PQ
+                           source.transferFunction == "ITU_R_2100_HLG")  // kCMFormatDescriptionTransferFunction_ITU_R_2100_HLG
+
         let targetCodec = config.videoCodec
         var profileLevel: String? = nil
         if isHDR {
@@ -569,12 +607,11 @@ public class JMVideoCompressor {
                 profileLevel = kVTProfileLevel_HEVC_Main10_AutoLevel as String
                 if #available(iOS 16.0, macOS 13.0, *) {
                     compressionProperties[kVTCompressionPropertyKey_HDRMetadataInsertionMode as String] = kVTHDRMetadataInsertionMode_Auto
-                } else { /* Warning */ }
-            } else { /* Warning, set SDR profile */
-                 if targetCodec == .h264 {
-                     profileLevel = AVVideoProfileLevelH264HighAutoLevel
-                     compressionProperties[AVVideoH264EntropyModeKey] = AVVideoH264EntropyModeCABAC
-                 }
+                } else { print("Warning: HDR metadata insertion not available on this OS version for HEVC.") }
+            } else {
+                 print("Warning: HDR content detected, but H.264 codec selected. HDR information might be lost or improperly handled. Consider HEVC for HDR.")
+                 profileLevel = AVVideoProfileLevelH264HighAutoLevel
+                 compressionProperties[AVVideoH264EntropyModeKey] = AVVideoH264EntropyModeCABAC
             }
         } else { // SDR
             if targetCodec == .hevc { profileLevel = kVTProfileLevel_HEVC_Main_AutoLevel as String }
@@ -585,37 +622,52 @@ public class JMVideoCompressor {
         }
         if let level = profileLevel { compressionProperties[AVVideoProfileLevelKey] = level }
 
-
-        // 4. Construct the final settings dictionary
-        let settings: [String: Any] = [
+        var settings: [String: Any] = [
             AVVideoCodecKey: targetCodec.avCodecType,
             AVVideoWidthKey: finalEncodingWidth,
             AVVideoHeightKey: finalEncodingHeight,
             AVVideoCompressionPropertiesKey: compressionProperties
         ]
+        
+        // 컬러 프로퍼티 설정 (소스에서 최대한 가져오도록)
+        var colorProperties: [String: String] = [:]
+        if let primaries = source.colorPrimaries { colorProperties[AVVideoColorPrimariesKey] = primaries }
+        if let transfer = source.transferFunction { colorProperties[AVVideoTransferFunctionKey] = transfer }
+        if let matrix = source.yCbCrMatrix { colorProperties[AVVideoYCbCrMatrixKey] = matrix }
+        if !colorProperties.isEmpty {
+            settings[AVVideoColorPropertiesKey] = colorProperties
+        }
 
-        // 5. Return both settings and the calculated transform
+
         return (settings, finalTransform)
     }
 
-
-    /// Creates the audio output settings dictionary.
     private func createTargetAudioSettings(config: CompressionConfig, source: SourceAudioSettings?) throws -> [String: Any]? {
-        guard let source = source else { return nil }
+        guard let sourceAudio = source else { return nil } // 원본 오디오 트랙 없으면 nil 반환
+        // 사용자가 오디오 비트레이트를 0으로 설정하여 오디오 제거를 의도한 경우
+        if config.audioBitrate <= 0 {
+            print("Info: Audio bitrate is 0, audio track will be removed.")
+            return nil
+        }
+
         var audioChannelLayout = AudioChannelLayout(); memset(&audioChannelLayout, 0, MemoryLayout<AudioChannelLayout>.size)
-        let targetChannels = min(config.audioChannels ?? source.channels, 2)
+        let targetChannels = min(config.audioChannels ?? sourceAudio.channels, 2) // 최대 2채널 (스테레오)
         audioChannelLayout.mChannelLayoutTag = (targetChannels == 1) ? kAudioChannelLayoutTag_Mono : kAudioChannelLayoutTag_Stereo
 
-        let targetSampleRate = max(8000.0, min(192_000.0, Double(config.audioSampleRate)))
+        let targetSampleRate = max(8000.0, min(Double(config.audioSampleRate), Double(sourceAudio.sampleRate))) // 원본 샘플레이트 초과하지 않도록
+        
         let minBitrate: Float = 16_000
         var effectiveBitrate = Float(config.audioBitrate)
-        if effectiveBitrate > source.bitrate * 1.2 && source.bitrate > 0 { // 원본 오디오 비트레이트 정보가 있을 때만 적용
-             effectiveBitrate = max(source.bitrate * 0.8, minBitrate)
+        if sourceAudio.bitrate > 0 && effectiveBitrate > sourceAudio.bitrate * 1.2 {
+             effectiveBitrate = max(sourceAudio.bitrate * 0.8, minBitrate)
         }
-        effectiveBitrate = max(effectiveBitrate, minBitrate) // 최소값 보장
+        effectiveBitrate = max(effectiveBitrate, minBitrate)
 
         var targetCodec = config.audioCodec
-        if (targetCodec == .aac_he_v1 || targetCodec == .aac_he_v2) && targetSampleRate > 48000 { targetCodec = .aac }
+        if (targetCodec == .aac_he_v1 || targetCodec == .aac_he_v2) && targetSampleRate > 48000 {
+            print("Warning: HE-AAC is typically used with sample rates <= 48kHz. Forcing AAC-LC for \(targetSampleRate)Hz.")
+            targetCodec = .aac
+        }
 
         return [
             AVFormatIDKey: targetCodec.formatID,
@@ -626,7 +678,6 @@ public class JMVideoCompressor {
         ]
     }
 
-    /// Calculates the target **visual** dimensions based on constraints.
     private func calculateTargetSize(
         scale: CGSize?,
         maxLongerDimension: CGFloat?,
@@ -646,25 +697,24 @@ public class JMVideoCompressor {
                 targetVisualWidth = visualOriginalSize.width * scaleFactor
                 targetVisualHeight = visualOriginalSize.height * scaleFactor
             }
-        } else if let scale = scale, !(scale.width == -1 && scale.height == -1) {
-             if scale.width != -1 && scale.height != -1 {
+        } else if let scale = scale, !(scale.width == -1 && scale.height == -1) { // scale이 (-1, -1)이 아닌 경우
+             if scale.width != -1 && scale.height != -1 { // 너비와 높이 모두 지정
                  targetVisualWidth = scale.width
                  targetVisualHeight = scale.height
-             } else if scale.width != -1 {
+             } else if scale.width != -1 { // 너비만 지정
                  targetVisualWidth = scale.width
                  targetVisualHeight = (visualOriginalSize.height / visualOriginalSize.width) * targetVisualWidth
-             } else {
+             } else { // 높이만 지정 (scale.height != -1)
                  targetVisualHeight = scale.height
                  targetVisualWidth = (visualOriginalSize.width / visualOriginalSize.height) * targetVisualHeight
              }
         }
-
+        // 너비와 높이가 2의 배수가 되도록 조정 (많은 코덱에서 권장)
         targetVisualWidth = max(2, floor(targetVisualWidth / 2.0) * 2.0)
         targetVisualHeight = max(2, floor(targetVisualHeight / 2.0) * 2.0)
         print("Calculated Target Visual Size: \(targetVisualWidth) x \(targetVisualHeight)")
         return CGSize(width: targetVisualWidth, height: targetVisualHeight)
     }
-
 
     private func detectContentType(videoTrack: AVAssetTrack) -> VideoContentType { return .standard }
     private func applyContentAwareOptimizations(to config: inout CompressionConfig, contentType: VideoContentType) { /* ... */ }
@@ -672,22 +722,32 @@ public class JMVideoCompressor {
     private func gatherAnalytics(
         originalURL: URL, compressedURL: URL,
         sourceVideoSettings: SourceVideoSettings, sourceAudioSettings: SourceAudioSettings?,
-        targetVideoSettings: [String: Any], targetAudioSettings: [String: Any]?
+        targetVideoSettings: [String: Any], targetAudioSettings: [String: Any]?,
+        trimmedDuration: CMTime // 트리밍된 실제 영상 길이
     ) async throws -> CompressionAnalytics {
         let originalFileSize = getFileSize(url: originalURL)
         let compressedFileSize = getFileSize(url: compressedURL)
-        let ratio = (compressedFileSize > 0) ? Float(originalFileSize) / Float(compressedFileSize) : 0
+        let ratio = (compressedFileSize > 0 && originalFileSize > 0) ? Float(originalFileSize) / Float(compressedFileSize) : 0 // 0으로 나누기 방지
+        
         let compressedDimensions = CGSize(
             width: targetVideoSettings[AVVideoWidthKey] as? CGFloat ?? 0,
             height: targetVideoSettings[AVVideoHeightKey] as? CGFloat ?? 0
         )
+        
         let compressedVideoBitrate: Float
-        if let props = targetVideoSettings[AVVideoCompressionPropertiesKey] as? [String: Any], let br = props[AVVideoAverageBitRateKey] as? NSNumber {
-            compressedVideoBitrate = br.floatValue
+        let durationSeconds = CMTimeGetSeconds(trimmedDuration) // totalSourceTime이 트리밍된 길이를 가짐
+        if durationSeconds > 0 {
+            if let props = targetVideoSettings[AVVideoCompressionPropertiesKey] as? [String: Any],
+               let brKey = props[AVVideoAverageBitRateKey] as? NSNumber {
+                compressedVideoBitrate = brKey.floatValue
+            } else {
+                // 비트레이트 키가 없는 경우 (예: 품질 기반 압축), 파일 크기와 길이로 추정
+                compressedVideoBitrate = Float(compressedFileSize * 8) / Float(durationSeconds)
+            }
         } else {
-            let duration = totalSourceTime.seconds
-            compressedVideoBitrate = (duration > 0) ? Float(compressedFileSize * 8) / Float(duration) : 0
+            compressedVideoBitrate = 0
         }
+
         let compressedAudioBitrate = (targetAudioSettings?[AVEncoderBitRateKey] as? NSNumber)?.floatValue
         let processingTime = Date().timeIntervalSince(self.isolationQueue.sync { self.startTime ?? Date() })
 
@@ -705,16 +765,24 @@ public class JMVideoCompressor {
 
     private func getFileSize(url: URL) -> Int64 {
         do { return (try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64) ?? 0 }
-        catch { return 0 }
+        catch { print("Warning: Could not get file size for \(url.path). Error: \(error.localizedDescription)"); return 0 }
     }
 
     private func logCompressionStart(sourceURL: URL, outputURL: URL, config: CompressionConfig) {
        #if DEBUG
        print("-------------------------------------")
        print("JMVideoCompressor: Starting compression...")
-       print("  Source: \(sourceURL.lastPathComponent) (\(String(format: "%.2f MB", sourceURL.sizePerMB())))")
+       let sourceSizeMB = (try? FileManager.default.attributesOfItem(atPath: sourceURL.path)[.size] as? NSNumber)?.doubleValue ?? 0.0 / (1024.0*1024.0)
+       print("  Source: \(sourceURL.lastPathComponent) (\(String(format: "%.2f MB", sourceSizeMB)))")
        print("  Output: \(outputURL.lastPathComponent)")
-       print("  Config: \(config)")
+       print("  Config: \(config.description)") // config.description 사용
+       if let startTime = config.trimStartTime, let endTime = config.trimEndTime {
+           print("  Trimming from \(CMTimeGetSeconds(startTime))s to \(CMTimeGetSeconds(endTime))s")
+       } else if let startTime = config.trimStartTime {
+           print("  Trimming from \(CMTimeGetSeconds(startTime))s to end")
+       } else if let endTime = config.trimEndTime {
+           print("  Trimming from start to \(CMTimeGetSeconds(endTime))s")
+       }
        print("-------------------------------------")
        #endif
     }
@@ -725,18 +793,18 @@ public class JMVideoCompressor {
        -------------------------------------
        JMVideoCompressor: Compression finished ✅
         Output: \(outputURL.lastPathComponent)
-        Original Size: \(String(format: "%.2f MB", Double(analytics.originalFileSize) / (1024*1024)))
-        Compressed Size: \(String(format: "%.2f MB", Double(analytics.compressedFileSize) / (1024*1024)))
+        Original File Size: \(String(format: "%.2f MB", Double(analytics.originalFileSize) / (1024*1024)))
+        Compressed File Size: \(String(format: "%.2f MB", Double(analytics.compressedFileSize) / (1024*1024)))
         Ratio: \(String(format: "%.2f : 1", analytics.compressionRatio))
         Time Elapsed: \(String(format: "%.2f seconds", analytics.processingTime))
         Original Visual Res: \(Int(analytics.originalDimensions.width))x\(Int(analytics.originalDimensions.height)) -> Compressed Encoded Res: \(Int(analytics.compressedDimensions.width))x\(Int(analytics.compressedDimensions.height))
-        Original Bitrate: \(String(format: "%.0f kbps", analytics.originalVideoBitrate / 1000)) -> Compressed Bitrate: \(String(format: "%.0f kbps", analytics.compressedVideoBitrate / 1000))
+        Original Video Bitrate (Full Track): \(String(format: "%.0f kbps", analytics.originalVideoBitrate / 1000)) -> Compressed Video Bitrate (Trimmed Segment): \(String(format: "%.0f kbps", analytics.compressedVideoBitrate / 1000))
+        (Trimmed duration for compression: \(String(format: "%.2f seconds", CMTimeGetSeconds(self.totalSourceTime))))
        -------------------------------------
        """)
        #endif
     }
 }
-
 // MARK: - AVFileType Extension Helper (Internal)
 extension AVFileType {
     var preferredFilenameExtension: String {

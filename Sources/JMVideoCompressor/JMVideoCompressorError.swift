@@ -10,38 +10,26 @@ import Foundation
 /// Errors that can occur during video compression.
 public enum JMVideoCompressorError: Error, LocalizedError {
     case invalidSourceURL(URL)
-    case invalidOutputPath(URL)
+    case codecNotSupported(VideoCodec)
     case missingVideoTrack
     case readerInitializationFailed(Error?)
     case writerInitializationFailed(Error?)
-    case compressionFailed(Error)
+    case compressionFailed(Error?)
     case cancelled
-    case underlyingError(Error)
-    /// The selected video codec is not supported on the current device/OS.
-    case codecNotSupported(VideoCodec) // Use the VideoCodec enum
+    case invalidOutputPath(URL)
+    case invalidTrimTimes(String) // 새로운 에러 케이스
 
     public var errorDescription: String? {
         switch self {
-        case .invalidSourceURL(let url):
-            return "Invalid source video URL: \(url.path)"
-        case .invalidOutputPath(let url):
-            return "Output path is not a valid directory or cannot be created: \(url.path)"
-        case .missingVideoTrack:
-            return "The source asset does not contain a video track."
-        case .readerInitializationFailed(let underlyingError):
-            let reason = underlyingError?.localizedDescription ?? "Unknown reason"
-            return "Failed to initialize AVAssetReader. Reason: \(reason)"
-        case .writerInitializationFailed(let underlyingError):
-            let reason = underlyingError?.localizedDescription ?? "Unknown reason"
-            return "Failed to initialize AVAssetWriter. Reason: \(reason)"
-        case .compressionFailed(let error):
-            return "Video compression failed: \(error.localizedDescription)"
-        case .cancelled:
-            return "Compression operation was cancelled."
-        case .underlyingError(let error):
-            return "An underlying system error occurred: \(error.localizedDescription)"
-        case .codecNotSupported(let codec):
-            return "Video codec \(codec) is not supported on this device/OS."
+        case .invalidSourceURL(let url): return "Invalid source URL: \(url.path)"
+        case .codecNotSupported(let codec): return "Video codec not supported: \(codec)"
+        case .missingVideoTrack: return "Source asset is missing a video track."
+        case .readerInitializationFailed(let err): return "Failed to initialize AVAssetReader. \(err?.localizedDescription ?? "")"
+        case .writerInitializationFailed(let err): return "Failed to initialize AVAssetWriter. \(err?.localizedDescription ?? "")"
+        case .compressionFailed(let err): return "Video compression failed. \(err?.localizedDescription ?? "")"
+        case .cancelled: return "Video compression cancelled by user."
+        case .invalidOutputPath(let url): return "Invalid output path or directory: \(url.path)"
+        case .invalidTrimTimes(let message): return "Invalid trim times: \(message)"
         }
     }
 }
