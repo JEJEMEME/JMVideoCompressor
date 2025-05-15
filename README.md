@@ -226,6 +226,8 @@ The `CompressionConfig` struct provides detailed control over the compression pr
 * `forceVisualEncodingDimensions`: `Bool`. Default is `false`.
     * `false`: Rotated videos (e.g., portrait videos shot on iPhone) maintain their original encoding dimensions (e.g., 1920x1080) and the rotation is preserved via transform metadata in the output file. The `maxLongerDimension` scaling is applied to the visual size before determining encoding size.
     * `true`: Rotated videos are encoded using their visual dimensions (e.g., 1080x1920). The transform metadata is removed (`.identity`). This can improve compatibility with players that don't respect transform metadata, but might slightly affect quality or compression efficiency.
+* `trimStartTime`: `CMTime?`. Start time for trimming the video (based on the original video's timeline). If `nil`, compression starts from the beginning of the video. Default is `nil`.
+* `trimEndTime`: `CMTime?`. End time for trimming the video (based on the original video's timeline). If `nil`, compression goes to the end of the video. Default is `nil`.
 
 **Audio Settings:**
 
