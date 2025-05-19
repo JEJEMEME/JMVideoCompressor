@@ -16,6 +16,7 @@ A Swift library designed for efficient video compression on iOS and macOS using 
 * **Cancellation:** Support for cancelling ongoing compression operations.
 * **Detailed Analytics:** Get insights into the compression results, including file sizes, compression ratio, processing time, dimensions, and bitrates.
 * **Output Control:** Specify a target output directory or a precise output file URL.
+* **Video Trimming:** Ability to specify start and end times to compress only a segment of the original video.
 
 ## Requirements
 
@@ -144,6 +145,8 @@ do {
     customConfig.maxLongerDimension = 1280 // Set max length of the longer side to 1280p, maintain aspect ratio
     customConfig.fps = 24 // Target 24 FPS (will use frame reduction if source > 24)
     customConfig.forceVisualEncodingDimensions = true // Optional: Encode rotated videos with visual dimensions (e.g., 1080x1920)
+    // customConfig.trimStartTime = CMTime(seconds: 5, preferredTimescale: 600) // Optional: Start trimming at 5 seconds
+    // customConfig.trimEndTime = CMTime(seconds: 15, preferredTimescale: 600)   // Optional: End trimming at 15 seconds
 
     // --- Audio Settings ---
     customConfig.audioCodec = .aac_he_v1 // High-Efficiency AAC
