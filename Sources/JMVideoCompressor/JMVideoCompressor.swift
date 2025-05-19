@@ -116,7 +116,8 @@ public class JMVideoCompressor {
         quality: VideoQuality = .mediumQuality,
         frameReducer: VideoFrameReducer = ReduceFrameEvenlySpaced(),
         outputDirectory: URL? = nil,
-        progressHandler: ((Float) -> Void)? = nil
+        progressHandler: ((Float) -> Void)? = nil,
+        metadataItems: [AVMetadataItem]? = nil
     ) async throws -> (url: URL, analytics: CompressionAnalytics) {
         var config = quality.defaultConfig
         if let explicitOutputDir = outputDirectory {
@@ -125,14 +126,15 @@ public class JMVideoCompressor {
         }
         // 이 메서드는 CompressionConfig의 trimStartTime, trimEndTime을 사용하지 않음.
         // 트리밍을 원하면 config를 직접 전달하는 compressVideo 메서드를 사용해야 함.
-        return try await compressVideo(url, config: config, frameReducer: frameReducer, progressHandler: progressHandler)
+        return try await compressVideo(url, config: config, frameReducer: frameReducer, progressHandler: progressHandler, metadataItems: metadataItems)
     }
 
     public func compressVideo(
         _ url: URL,
         config: CompressionConfig,
         frameReducer: VideoFrameReducer = ReduceFrameEvenlySpaced(),
-        progressHandler: ((Float) -> Void)? = nil
+        progressHandler: ((Float) -> Void)? = nil,
+        metadataItems: [AVMetadataItem]? = nil
     ) async throws -> (url: URL, analytics: CompressionAnalytics) {
 
         isolationQueue.sync {
@@ -233,6 +235,41 @@ public class JMVideoCompressor {
 
         do { localWriter = try AVAssetWriter(url: outputURL, fileType: effectiveConfig.fileType) } catch { throw JMVideoCompressorError.writerInitializationFailed(error) }
         localWriter.shouldOptimizeForNetworkUse = true
+        if let customMetadata = metadataItems, !customMetadata.isEmpty {
+            localWriter.metadata = customMetadata
+            #if DEBUG
+            print("JMVideoCompressor: Custom metadata items (\(customMetadata.count)) are set to AVAssetWriter.")
+            for item in customMetadata {
+                var keyDescription: String = "Unknown"
+                if let identifier = item.identifier?.rawValue {
+                    keyDescription = "Identifier: \(identifier)"
+                } else if let key = item.key { // item.key는 (any NSCopying & NSObjectProtocol)? 타입
+                    if let nsKey = key as? NSString {
+                        keyDescription = "Key: \"\(nsKey as String)\""
+                        if let keySpace = item.keySpace?.rawValue {
+                            keyDescription += " (KeySpace: \(keySpace))"
+                        }
+                    } else {
+                        // NSString으로 캐스팅되지 않는 다른 타입의 key일 경우 (드뭄)
+                        keyDescription = "Key: [\(String(describing: type(of: key)))] \(String(describing: key))"
+                        if let keySpace = item.keySpace?.rawValue {
+                            keyDescription += " (KeySpace: \(keySpace))"
+                        }
+                    }
+                }
+
+                let valueDescription = item.value != nil ? String(describing: item.value!) : "nil"
+                let dataTypeDescription = item.dataType ?? "N/A"
+                let langTagDescription = item.extendedLanguageTag ?? "N/A"
+                
+                print("  Metadata -> \(keyDescription) | Value: \(valueDescription) | DataType: \(dataTypeDescription) | Lang: \(langTagDescription)")
+            }
+            #endif
+        } else {
+            #if DEBUG
+            print("JMVideoCompressor: No custom metadata items provided or empty. Writer metadata will be default.")
+            #endif
+        }
         isolationQueue.sync { self.assetReader = localReader; self.assetWriter = localWriter }
 
         let videoOutputSettings: [String: Any] = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange] // 실제 지원하는 포맷으로 변경 필요할 수 있음
