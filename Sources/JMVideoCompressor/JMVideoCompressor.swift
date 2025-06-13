@@ -390,7 +390,7 @@ public class JMVideoCompressor {
     }
 
     // MARK: - Private Processing Logic
-    private func processTrack(
+   private func processTrack(
         assetWriterInput: AVAssetWriterInput,
         readerOutput: AVAssetReaderOutput,
         frameIndexesToKeep: [Int]?,
@@ -400,82 +400,106 @@ public class JMVideoCompressor {
         var keepFrameIndicesIterator = frameIndexesToKeep?.makeIterator()
         var nextIndexToKeep: Int? = keepFrameIndicesIterator?.next()
         var lastProgressUpdate: Float = -1.0
-
-        // self.effectiveTrimStartTime 을 사용하여 PTS 조정
         let trimOffsetTime = self.effectiveTrimStartTime
 
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) -> Void in
             var didResume = false
+            let resumeQueue = DispatchQueue(label: "com.jmvideocompressor.resume")
+            
             @Sendable func safeResume(throwing error: Error? = nil) {
-                if !didResume {
+                resumeQueue.sync {
+                    guard !didResume else { return }
                     didResume = true
-                    if let error = error { continuation.resume(throwing: error) }
-                    else { continuation.resume() }
+                    if let error = error {
+                        continuation.resume(throwing: error)
+                    } else {
+                        continuation.resume()
+                    }
                 }
             }
 
+            // requestMediaDataWhenReady의 콜백은 반복적으로 호출될 수 있음
             assetWriterInput.requestMediaDataWhenReady(on: isolationQueue) { [weak self] in
-                guard let self = self else { safeResume(); return }
+                guard let self = self else {
+                    safeResume(throwing: JMVideoCompressorError.compressionFailed(nil))
+                    return
+                }
 
-                while assetWriterInput.isReadyForMoreMediaData && !self.cancelled {
-                     // 루프 시작 시 취소 상태 확인
-                    if self.cancelled {
-                        assetWriterInput.markAsFinished() // writer input을 완료 처리
-                        safeResume(throwing: JMVideoCompressorError.cancelled)
-                        return
-                    }
-
-                    guard let sampleBuffer = readerOutput.copyNextSampleBuffer() else {
-                        // 샘플 버퍼가 더 이상 없으면 완료
-                        assetWriterInput.markAsFinished()
-                        if let handler = progressHandler, lastProgressUpdate < 1.0, self.totalSourceTime.seconds > 0 {
-                             DispatchQueue.main.async { handler(1.0) } // 마지막으로 100% 업데이트
+                // 메인 처리 루프
+                do {
+                    while assetWriterInput.isReadyForMoreMediaData {
+                        // 취소 확인
+                        if self.cancelled {
+                            assetWriterInput.markAsFinished()
+                            safeResume(throwing: JMVideoCompressorError.cancelled)
+                            return
                         }
-                        safeResume()
-                        return
-                    }
 
-                    var shouldAppend = true
-                    if frameIndexesToKeep != nil { // 비디오 트랙이고 프레임 감소가 필요한 경우
-                        if let targetIndex = nextIndexToKeep {
-                            if frameCounter == targetIndex {
-                                nextIndexToKeep = keepFrameIndicesIterator?.next()
+                        // 프레임 스킵 체크
+                        var shouldAppend = true
+                        if frameIndexesToKeep != nil {
+                            if let targetIndex = nextIndexToKeep {
+                                if frameCounter == targetIndex {
+                                    nextIndexToKeep = keepFrameIndicesIterator?.next()
+                                } else {
+                                    shouldAppend = false
+                                }
                             } else {
                                 shouldAppend = false
                             }
-                        } else { // 모든 필요한 프레임을 이미 처리함
-                            shouldAppend = false
                         }
-                        frameCounter += 1
-                    }
 
-                    if shouldAppend {
-                        // 진행률 업데이트 (비디오 트랙에 대해서만)
-                        if assetWriterInput.mediaType == .video, let handler = progressHandler, self.totalSourceTime.seconds > 0 {
-                            let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-                            if pts.isValid {
-                                // PTS를 트리밍된 세그먼트의 시작 시간 기준으로 조정
-                                let relativePts = CMTimeSubtract(pts, trimOffsetTime)
-                                let progress = Float(CMTimeGetSeconds(relativePts) / CMTimeGetSeconds(self.totalSourceTime))
-                                
-                                // 진행률이 실제로 변경되었을 때만 업데이트 (0.01 단위) 또는 완료 시
-                                if progress >= lastProgressUpdate + 0.01 || (progress >= 1.0 && lastProgressUpdate < 1.0) {
-                                    DispatchQueue.main.async { handler(min(max(progress, 0.0), 1.0)) }
-                                    lastProgressUpdate = progress
-                                }
+                        // 스킵해야 하는 프레임이면 버퍼를 복사하지 않음
+                        if !shouldAppend && frameIndexesToKeep != nil {
+                            frameCounter += 1
+                            continue
+                        }
+
+                        // 샘플 버퍼 가져오기
+                        guard let sampleBuffer = readerOutput.copyNextSampleBuffer() else {
+                            // 더 이상 샘플이 없으면 완료
+                            assetWriterInput.markAsFinished()
+                            if let handler = progressHandler, lastProgressUpdate < 1.0, self.totalSourceTime.seconds > 0 {
+                                DispatchQueue.main.async { handler(1.0) }
                             }
-                        }
-
-                        if !assetWriterInput.append(sampleBuffer) {
-                            let writerError = self.assetWriter?.error
-                            print("Error: Failed to append \(assetWriterInput.mediaType) buffer. Writer status: \(self.assetWriter?.status.rawValue ?? -1). Error: \(writerError?.localizedDescription ?? "unknown")")
-                            safeResume(throwing: JMVideoCompressorError.compressionFailed(writerError ?? NSError(domain: "JMVideoCompressor", code: -6, userInfo: [NSLocalizedDescriptionKey: "Failed to append sample buffer."])))
+                            safeResume()
                             return
                         }
+
+                        if frameIndexesToKeep != nil {
+                            frameCounter += 1
+                        }
+
+                        if shouldAppend {
+                            // 진행률 업데이트
+                            if assetWriterInput.mediaType == .video, 
+                            let handler = progressHandler, 
+                            self.totalSourceTime.seconds > 0 {
+                                let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+                                if pts.isValid {
+                                    let relativePts = CMTimeSubtract(pts, trimOffsetTime)
+                                    let progress = Float(CMTimeGetSeconds(relativePts) / CMTimeGetSeconds(self.totalSourceTime))
+                                    
+                                    if progress >= lastProgressUpdate + 0.01 || (progress >= 1.0 && lastProgressUpdate < 1.0) {
+                                        DispatchQueue.main.async { handler(min(max(progress, 0.0), 1.0)) }
+                                        lastProgressUpdate = progress
+                                    }
+                                }
+                            }
+
+                            // 샘플 추가
+                            if !assetWriterInput.append(sampleBuffer) {
+                                let writerError = self.assetWriter?.error
+                                print("Error: Failed to append \(assetWriterInput.mediaType) buffer. Writer status: \(self.assetWriter?.status.rawValue ?? -1). Error: \(writerError?.localizedDescription ?? "unknown")")
+                                safeResume(throwing: JMVideoCompressorError.compressionFailed(writerError ?? NSError(domain: "JMVideoCompressor", code: -6, userInfo: [NSLocalizedDescriptionKey: "Failed to append sample buffer."])))
+                                return
+                            }
+                        }
                     }
+                    // isReadyForMoreMediaData가 false가 되면 루프를 종료하고 다음 콜백을 기다림
+                } catch {
+                    safeResume(throwing: error)
                 }
-                // 루프 종료 후에도 isReadyForMoreMediaData가 false가 될 수 있으므로, 여기서 완료를 알리지 않음.
-                // 샘플이 고갈되거나(nil 반환) 취소될 때 완료를 알림.
             }
         }
     }
