@@ -487,41 +487,78 @@ final class JMVideoCompressorTests: XCTestCase {
     
     // MARK: - Cancellation Test
     func testCompressionCancellation() async throws {
+        print("🔵 [TEST] Starting testCompressionCancellation")
+        
         var config = CompressionConfig.default
         config.outputDirectory = outputDirectory
-        config.videoBitrate = 100_000 // 압축 시간을 조금 늘리기 위해 비트레이트 낮춤
-        config.maxLongerDimension = 320 // 해상도 낮춰서 빠르게 처리되도록
-
-        let expectation = XCTestExpectation(description: "Compression cancellation")
+        config.videoBitrate = 100_000
+        config.maxLongerDimension = 320
         let uniqueOutputFilename = "cancelled_video.mp4"
         config.outputURL = outputDirectory.appendingPathComponent(uniqueOutputFilename)
-
-
-        Task {
+        
+        print("🔵 [TEST] Config created, outputURL: \(config.outputURL?.path ?? "nil")")
+        
+        // 압축 작업을 위한 Task 생성
+        print("🔵 [TEST] Creating compression task...")
+        let compressionTask = Task { () -> Bool in
+            print("🟢 [COMPRESSION TASK] Started")
             do {
-                print("Starting compression for cancellation test...")
-                // 중간에 취소할 수 있도록 약간의 지연 후 취소 요청
-                Task {
-                    try await Task.sleep(nanoseconds: 100_000_000) // 0.1초 후 취소
-                    print("Requesting cancellation...")
-                    compressor.cancel()
-                }
-                _ = try await compressor.compressVideo(sampleVideoURL, config: config, progressHandler: { progress in
-                    print("Cancellation test progress: \(progress * 100)%")
-                })
-                XCTFail("Compression should have been cancelled and thrown an error.")
+                print("🟢 [COMPRESSION TASK] Calling compressor.compressVideo...")
+                let result = try await compressor.compressVideo(
+                    sampleVideoURL, 
+                    config: config, 
+                    progressHandler: { progress in
+                        print("🟡 [PROGRESS] \(progress * 100)%")
+                    }
+                )
+                print("🔴 [COMPRESSION TASK] Unexpected success: \(result)")
+                XCTFail("Compression should have been cancelled")
+                return false
             } catch JMVideoCompressorError.cancelled {
-                print("Successfully caught cancellation error.")
-                expectation.fulfill()
-                // 취소된 경우 출력 파일이 존재하지 않거나 비어 있어야 함
-                if let outputURL = config.outputURL {
-                    XCTAssertFalse(FileManager.default.fileExists(atPath: outputURL.path), "Output file should not exist after cancellation if writer was cancelled early.")
-                }
+                print("🟢 [COMPRESSION TASK] Correctly caught cancellation")
+                return true
             } catch {
-                XCTFail("Unexpected error during cancellation test: \(error.localizedDescription)")
+                print("🔴 [COMPRESSION TASK] Unexpected error: \(error)")
+                XCTFail("Unexpected error: \(error)")
+                return false
             }
         }
-        wait(for: [expectation], timeout: 15.0) // 취소 테스트는 시간이 좀 더 걸릴 수 있음
+        
+        // 취소 작업을 위한 Task 생성
+        print("🔵 [TEST] Creating cancellation task...")
+        let cancellationTask = Task { () -> Void in
+            print("🟣 [CANCEL TASK] Started, waiting 200ms...")
+            try await Task.sleep(nanoseconds: 200_000_000)
+            print("🟣 [CANCEL TASK] Calling cancel()...")
+            compressor.cancel()
+            print("🟣 [CANCEL TASK] Cancel called")
+        }
+        
+        // 두 Task가 완료될 때까지 대기
+        print("🔵 [TEST] Waiting for tasks to complete...")
+        
+        do {
+            let wasCancelled = try await compressionTask.value
+            print("🔵 [TEST] Compression task completed, wasCancelled: \(wasCancelled)")
+            
+            try await cancellationTask.value
+            print("🔵 [TEST] Cancellation task completed")
+            
+            XCTAssertTrue(wasCancelled, "Compression should have been cancelled")
+            
+            // 출력 파일이 존재하지 않는지 확인
+            if let outputURL = config.outputURL {
+                try await Task.sleep(nanoseconds: 100_000_000)
+                let fileExists = FileManager.default.fileExists(atPath: outputURL.path)
+                print("🔵 [TEST] Output file exists: \(fileExists)")
+                XCTAssertFalse(fileExists, "Output file should not exist after cancellation")
+            }
+            
+            print("🔵 [TEST] Test completed successfully")
+        } catch {
+            print("🔴 [TEST] Error waiting for tasks: \(error)")
+            throw error
+        }
     }
 
 }

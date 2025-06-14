@@ -98,6 +98,8 @@ public class JMVideoCompressor {
 
     // MARK: - Private Properties
     private let isolationQueue = DispatchQueue(label: "com.jmvideocompressor.isolation")
+    private let stateQueue = DispatchQueue(label: "com.jmvideocompressor.state") // New queue for state
+    
     private var assetWriter: AVAssetWriter?
     private var assetReader: AVAssetReader?
     private var cancelled: Bool = false
@@ -137,14 +139,16 @@ public class JMVideoCompressor {
         metadataItems: [AVMetadataItem]? = nil
     ) async throws -> (url: URL, analytics: CompressionAnalytics) {
 
-        isolationQueue.sync {
-             self.cancelled = false
-             self.startTime = Date()
-             self.assetReader = nil
-             self.assetWriter = nil
-             self.videoInput = nil
-             self.audioInput = nil
-             self.effectiveTrimStartTime = .zero // 초기화
+        // 상태 초기화 - stateQueue 사용
+        stateQueue.sync {
+            self.cancelled = false
+            self.startTime = Date()
+            self.assetReader = nil
+            self.assetWriter = nil
+            self.videoInput = nil
+            self.audioInput = nil
+            self.effectiveTrimStartTime = .zero
+            self.totalSourceTime = .zero
         }
 
         guard url.isFileURL, FileManager.default.fileExists(atPath: url.path) else { throw JMVideoCompressorError.invalidSourceURL(url) }
@@ -162,8 +166,8 @@ public class JMVideoCompressor {
 
         if let start = trimStart, let end = trimEnd {
             guard CMTimeCompare(start, end) == -1, // start < end
-                  CMTimeCompare(start, .zero) >= 0, // start >= 0
-                  CMTimeCompare(end, originalAssetDuration) <= 0 // end <= originalAssetDuration
+                CMTimeCompare(start, .zero) >= 0, // start >= 0
+                CMTimeCompare(end, originalAssetDuration) <= 0 // end <= originalAssetDuration
             else {
                 throw JMVideoCompressorError.invalidTrimTimes("Trim start time (\(CMTimeGetSeconds(start))s) must be before trim end time (\(CMTimeGetSeconds(end))s) and both must be within asset duration (0-\(CMTimeGetSeconds(originalAssetDuration))s).")
             }
@@ -171,7 +175,7 @@ public class JMVideoCompressor {
             isTrimmed = true
         } else if let start = trimStart {
             guard CMTimeCompare(start, .zero) >= 0, // start >= 0
-                  CMTimeCompare(start, originalAssetDuration) == -1 // start < originalAssetDuration
+                CMTimeCompare(start, originalAssetDuration) == -1 // start < originalAssetDuration
             else {
                 throw JMVideoCompressorError.invalidTrimTimes("Trim start time (\(CMTimeGetSeconds(start))s) must be within asset duration (0-\(CMTimeGetSeconds(originalAssetDuration))s).")
             }
@@ -179,7 +183,7 @@ public class JMVideoCompressor {
             isTrimmed = true
         } else if let end = trimEnd {
             guard CMTimeCompare(end, .zero) == 1, // end > 0
-                  CMTimeCompare(end, originalAssetDuration) <= 0 // end <= originalAssetDuration
+                CMTimeCompare(end, originalAssetDuration) <= 0 // end <= originalAssetDuration
             else {
                 throw JMVideoCompressorError.invalidTrimTimes("Trim end time (\(CMTimeGetSeconds(end))s) must be greater than zero and within asset duration (0-\(CMTimeGetSeconds(originalAssetDuration))s).")
             }
@@ -187,13 +191,12 @@ public class JMVideoCompressor {
             isTrimmed = true
         }
         
-        self.totalSourceTime = effectiveTimeRange.duration // 진행률 및 분석에 사용될 총 시간
-        self.effectiveTrimStartTime = effectiveTimeRange.start // 진행률 계산 시 PTS 오프셋으로 사용
+        self.totalSourceTime = effectiveTimeRange.duration
+        self.effectiveTrimStartTime = effectiveTimeRange.start
         if isTrimmed {
             print("JMVideoCompressor: Applying trim. Effective range: \(CMTimeGetSeconds(effectiveTimeRange.start))s - \(CMTimeGetSeconds(CMTimeAdd(effectiveTimeRange.start, effectiveTimeRange.duration)))s. Duration: \(CMTimeGetSeconds(effectiveTimeRange.duration))s")
         }
         // --- End Trimming Logic ---
-
 
         guard let sourceVideoTrack = try? await sourceAsset.loadTracks(withMediaType: .video).first else { throw JMVideoCompressorError.missingVideoTrack }
         let sourceAudioTrack = try? await sourceAsset.loadTracks(withMediaType: .audio).first
@@ -215,17 +218,23 @@ public class JMVideoCompressor {
 
         let localReader: AVAssetReader
         let localWriter: AVAssetWriter
+        
+        // defer 블록 수정 - stateQueue 사용
         defer {
-            isolationQueue.sync {
-                self.assetReader?.cancelReading()
-                self.assetWriter?.cancelWriting()
+            stateQueue.sync {
+                // cancelled 상태 확인하여 중복 작업 방지
+                if !self.cancelled {
+                    self.assetReader?.cancelReading()
+                    self.assetWriter?.cancelWriting()
+                }
                 self.assetReader = nil
                 self.assetWriter = nil
                 self.videoInput = nil
                 self.audioInput = nil
             }
-             print("JMVideoCompressor: Deferred cleanup executed.")
+            print("JMVideoCompressor: Deferred cleanup executed.")
         }
+        
         do { localReader = try AVAssetReader(asset: sourceAsset) } catch { throw JMVideoCompressorError.readerInitializationFailed(error) }
         
         // 트리밍 설정 적용
@@ -235,6 +244,7 @@ public class JMVideoCompressor {
 
         do { localWriter = try AVAssetWriter(url: outputURL, fileType: effectiveConfig.fileType) } catch { throw JMVideoCompressorError.writerInitializationFailed(error) }
         localWriter.shouldOptimizeForNetworkUse = true
+        
         if let customMetadata = metadataItems, !customMetadata.isEmpty {
             localWriter.metadata = customMetadata
             #if DEBUG
@@ -243,14 +253,13 @@ public class JMVideoCompressor {
                 var keyDescription: String = "Unknown"
                 if let identifier = item.identifier?.rawValue {
                     keyDescription = "Identifier: \(identifier)"
-                } else if let key = item.key { // item.key는 (any NSCopying & NSObjectProtocol)? 타입
+                } else if let key = item.key {
                     if let nsKey = key as? NSString {
                         keyDescription = "Key: \"\(nsKey as String)\""
                         if let keySpace = item.keySpace?.rawValue {
                             keyDescription += " (KeySpace: \(keySpace))"
                         }
                     } else {
-                        // NSString으로 캐스팅되지 않는 다른 타입의 key일 경우 (드뭄)
                         keyDescription = "Key: [\(String(describing: type(of: key)))] \(String(describing: key))"
                         if let keySpace = item.keySpace?.rawValue {
                             keyDescription += " (KeySpace: \(keySpace))"
@@ -270,9 +279,14 @@ public class JMVideoCompressor {
             print("JMVideoCompressor: No custom metadata items provided or empty. Writer metadata will be default.")
             #endif
         }
-        isolationQueue.sync { self.assetReader = localReader; self.assetWriter = localWriter }
+        
+        // stateQueue 사용
+        stateQueue.sync { 
+            self.assetReader = localReader
+            self.assetWriter = localWriter 
+        }
 
-        let videoOutputSettings: [String: Any] = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange] // 실제 지원하는 포맷으로 변경 필요할 수 있음
+        let videoOutputSettings: [String: Any] = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange]
         let videoOutput = AVAssetReaderTrackOutput(track: sourceVideoTrack, outputSettings: videoOutputSettings)
         videoOutput.alwaysCopiesSampleData = false
         guard localReader.canAdd(videoOutput) else { throw JMVideoCompressorError.compressionFailed(NSError(domain: "JMVideoCompressor", code: -2, userInfo: [NSLocalizedDescriptionKey: "Cannot add video reader output."])) }
@@ -280,14 +294,14 @@ public class JMVideoCompressor {
 
         var audioOutput: AVAssetReaderTrackOutput?
         if let sourceAudio = sourceAudioTrack, targetAudioSettings != nil {
-             let audioDecompressionSettings: [String: Any] = [
-                 AVFormatIDKey: kAudioFormatLinearPCM,
-                 AVNumberOfChannelsKey: effectiveConfig.audioChannels ?? sourceAudioSettings?.channels ?? 2
-             ]
-             let output = AVAssetReaderTrackOutput(track: sourceAudio, outputSettings: audioDecompressionSettings)
-             output.alwaysCopiesSampleData = false
-             if localReader.canAdd(output) { localReader.add(output); audioOutput = output }
-             else { print("Warning: Could not add audio reader output.") }
+            let audioDecompressionSettings: [String: Any] = [
+                AVFormatIDKey: kAudioFormatLinearPCM,
+                AVNumberOfChannelsKey: effectiveConfig.audioChannels ?? sourceAudioSettings?.channels ?? 2
+            ]
+            let output = AVAssetReaderTrackOutput(track: sourceAudio, outputSettings: audioDecompressionSettings)
+            output.alwaysCopiesSampleData = false
+            if localReader.canAdd(output) { localReader.add(output); audioOutput = output }
+            else { print("Warning: Could not add audio reader output.") }
         }
 
         let videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: targetVideoSettings)
@@ -295,23 +309,27 @@ public class JMVideoCompressor {
         videoInput.transform = finalTransform
         guard localWriter.canAdd(videoInput) else { throw JMVideoCompressorError.compressionFailed(NSError(domain: "JMVideoCompressor", code: -3, userInfo: [NSLocalizedDescriptionKey: "Cannot add video writer input."])) }
         localWriter.add(videoInput)
-        isolationQueue.sync { self.videoInput = videoInput }
+        
+        // stateQueue 사용
+        stateQueue.sync { self.videoInput = videoInput }
 
         var audioInput: AVAssetWriterInput?
         if let settings = targetAudioSettings, audioOutput != nil {
-             let input = AVAssetWriterInput(mediaType: .audio, outputSettings: settings)
-             input.expectsMediaDataInRealTime = false
-             if localWriter.canAdd(input) {
-                 localWriter.add(input)
-                 audioInput = input
-                 isolationQueue.sync { self.audioInput = input }
-             } else {
-                 print("Warning: Could not add audio writer input.")
-                 audioOutput = nil
-             }
+            let input = AVAssetWriterInput(mediaType: .audio, outputSettings: settings)
+            input.expectsMediaDataInRealTime = false
+            if localWriter.canAdd(input) {
+                localWriter.add(input)
+                audioInput = input
+                // stateQueue 사용
+                stateQueue.sync { self.audioInput = input }
+            } else {
+                print("Warning: Could not add audio writer input.")
+                audioOutput = nil
+            }
         }
 
         logCompressionStart(sourceURL: url, outputURL: outputURL, config: effectiveConfig)
+        
         guard localReader.startReading() else {
             if let error = localReader.error { throw JMVideoCompressorError.readerInitializationFailed(error) }
             throw JMVideoCompressorError.readerInitializationFailed(nil)
@@ -320,37 +338,38 @@ public class JMVideoCompressor {
             if let error = localWriter.error { throw JMVideoCompressorError.writerInitializationFailed(error) }
             throw JMVideoCompressorError.writerInitializationFailed(nil)
         }
-        // 세션 시작 시간을 트리밍된 세그먼트의 시작 시간으로 설정
+        
         localWriter.startSession(atSourceTime: effectiveTimeRange.start)
 
-
         let frameIndexesToKeep = needsFrameReduction ? frameReducer.reduce(originalFPS: sourceVideoSettings.fps, to: targetFPS, with: Float(self.totalSourceTime.seconds)) : nil
+        
         try await withThrowingTaskGroup(of: Void.self) { group in
-             group.addTask {
-                 try await self.processTrack(
-                     assetWriterInput: videoInput,
-                     readerOutput: videoOutput,
-                     frameIndexesToKeep: frameIndexesToKeep,
-                     progressHandler: progressHandler
-                 )
-             }
-             if let audioIn = audioInput, let audioOut = audioOutput {
-                 group.addTask {
-                     try await self.processTrack(
-                         assetWriterInput: audioIn,
-                         readerOutput: audioOut,
-                         frameIndexesToKeep: nil,
-                         progressHandler: nil // 오디오 트랙은 별도 진행률 보고 안 함
-                     )
-                 }
-             }
-             try await group.waitForAll()
+            group.addTask {
+                try await self.processTrack(
+                    assetWriterInput: videoInput,
+                    readerOutput: videoOutput,
+                    frameIndexesToKeep: frameIndexesToKeep,
+                    progressHandler: progressHandler
+                )
+            }
+            if let audioIn = audioInput, let audioOut = audioOutput {
+                group.addTask {
+                    try await self.processTrack(
+                        assetWriterInput: audioIn,
+                        readerOutput: audioOut,
+                        frameIndexesToKeep: nil,
+                        progressHandler: nil
+                    )
+                }
+            }
+            try await group.waitForAll()
         }
 
-        if isolationQueue.sync(execute: { self.cancelled }) {
-             localWriter.cancelWriting()
-             try? FileManager.default.removeItem(at: outputURL)
-             throw JMVideoCompressorError.cancelled
+        // stateQueue 사용
+        if stateQueue.sync(execute: { self.cancelled }) {
+            localWriter.cancelWriting()
+            try? FileManager.default.removeItem(at: outputURL)
+            throw JMVideoCompressorError.cancelled
         }
         else {
             await localWriter.finishWriting()
@@ -360,37 +379,53 @@ public class JMVideoCompressor {
                     originalURL: url, compressedURL: outputURL,
                     sourceVideoSettings: sourceVideoSettings, sourceAudioSettings: sourceAudioSettings,
                     targetVideoSettings: targetVideoSettings, targetAudioSettings: targetAudioSettings,
-                    // totalSourceTime은 이미 멤버 변수로 트리밍된 길이를 가짐
                     trimmedDuration: self.totalSourceTime
                 )
                 logCompressionEnd(outputURL: outputURL, analytics: analytics)
                 return (outputURL, analytics)
             case .failed:
-                 try? FileManager.default.removeItem(at: outputURL)
-                 throw JMVideoCompressorError.compressionFailed(localWriter.error)
-             case .cancelled:
-                  try? FileManager.default.removeItem(at: outputURL)
-                  throw JMVideoCompressorError.cancelled
-             default:
-                  try? FileManager.default.removeItem(at: outputURL)
-                  throw JMVideoCompressorError.compressionFailed(NSError(domain: "JMVideoCompressor", code: -5, userInfo: [NSLocalizedDescriptionKey: "Writer finished with unexpected status: \(localWriter.status.rawValue)"]))
+                try? FileManager.default.removeItem(at: outputURL)
+                throw JMVideoCompressorError.compressionFailed(localWriter.error)
+            case .cancelled:
+                try? FileManager.default.removeItem(at: outputURL)
+                throw JMVideoCompressorError.cancelled
+            default:
+                try? FileManager.default.removeItem(at: outputURL)
+                throw JMVideoCompressorError.compressionFailed(NSError(domain: "JMVideoCompressor", code: -5, userInfo: [NSLocalizedDescriptionKey: "Writer finished with unexpected status: \(localWriter.status.rawValue)"]))
             }
         }
     }
 
     public func cancel() {
-        isolationQueue.sync {
+        stateQueue.sync {
             guard !self.cancelled else { return }
             self.cancelled = true
-            // 실제 취소 로직은 processTrack 내부 및 reader/writer 상태 확인으로 처리됨
-            self.assetReader?.cancelReading()
-            self.assetWriter?.cancelWriting()
-            print("JMVideoCompressor: Cancellation requested.")
+        }
+        
+        // Cancel operations outside of state queue to avoid deadlock
+        isolationQueue.async { [weak self] in
+            guard let self = self else { return }
+            
+            // Cancel reader if it exists
+            if let reader = self.assetReader {
+                reader.cancelReading()
+                print("JMVideoCompressor: Cancelled reader.")
+            }
+            
+            // Mark writer inputs as finished
+            if let videoInput = self.videoInput {
+                videoInput.markAsFinished()
+            }
+            if let audioInput = self.audioInput {
+                audioInput.markAsFinished()
+            }
+            
+            print("JMVideoCompressor: Cancellation initiated.")
         }
     }
 
     // MARK: - Private Processing Logic
-   private func processTrack(
+    private func processTrack(
         assetWriterInput: AVAssetWriterInput,
         readerOutput: AVAssetReaderOutput,
         frameIndexesToKeep: [Int]?,
@@ -418,24 +453,38 @@ public class JMVideoCompressor {
                 }
             }
 
-            // requestMediaDataWhenReady의 콜백은 반복적으로 호출될 수 있음
-            assetWriterInput.requestMediaDataWhenReady(on: isolationQueue) { [weak self] in
+            // Capture required properties to avoid weak self issues
+            let totalSourceTime = self.totalSourceTime
+            let isolationQueue = self.isolationQueue
+            
+            // Create a strong reference for the callback to ensure stability
+            let processingBlock = { [weak self] in
+                // Early exit if self is nil (object deallocated)
                 guard let self = self else {
-                    safeResume(throwing: JMVideoCompressorError.compressionFailed(nil))
+                    assetWriterInput.markAsFinished()
+                    safeResume(throwing: JMVideoCompressorError.cancelled)
+                    return
+                }
+                
+                // Safely check cancellation status
+                let isCancelled = self.stateQueue.sync { self.cancelled }
+                if isCancelled {
+                    assetWriterInput.markAsFinished()
+                    safeResume(throwing: JMVideoCompressorError.cancelled)
                     return
                 }
 
-                // 메인 처리 루프
                 do {
                     while assetWriterInput.isReadyForMoreMediaData {
-                        // 취소 확인
-                        if self.cancelled {
+                        // Re-check cancellation in the loop
+                        let isCancelled = self.stateQueue.sync { self.cancelled }
+                        if isCancelled {
                             assetWriterInput.markAsFinished()
                             safeResume(throwing: JMVideoCompressorError.cancelled)
                             return
                         }
 
-                        // 프레임 스킵 체크
+                        // Frame skip check
                         var shouldAppend = true
                         if frameIndexesToKeep != nil {
                             if let targetIndex = nextIndexToKeep {
@@ -449,17 +498,17 @@ public class JMVideoCompressor {
                             }
                         }
 
-                        // 스킵해야 하는 프레임이면 버퍼를 복사하지 않음
+                        // Skip frame if needed
                         if !shouldAppend && frameIndexesToKeep != nil {
                             frameCounter += 1
                             continue
                         }
 
-                        // 샘플 버퍼 가져오기
+                        // Get sample buffer
                         guard let sampleBuffer = readerOutput.copyNextSampleBuffer() else {
-                            // 더 이상 샘플이 없으면 완료
+                            // No more samples, finish
                             assetWriterInput.markAsFinished()
-                            if let handler = progressHandler, lastProgressUpdate < 1.0, self.totalSourceTime.seconds > 0 {
+                            if let handler = progressHandler, lastProgressUpdate < 1.0, totalSourceTime.seconds > 0 {
                                 DispatchQueue.main.async { handler(1.0) }
                             }
                             safeResume()
@@ -471,14 +520,23 @@ public class JMVideoCompressor {
                         }
 
                         if shouldAppend {
-                            // 진행률 업데이트
+                            // Re-check cancellation before appending
+                            let isCancelled = self.stateQueue.sync { self.cancelled }
+                            if isCancelled {
+                                CMSampleBufferInvalidate(sampleBuffer)
+                                assetWriterInput.markAsFinished()
+                                safeResume(throwing: JMVideoCompressorError.cancelled)
+                                return
+                            }
+                            
+                            // Progress reporting
                             if assetWriterInput.mediaType == .video, 
                             let handler = progressHandler, 
-                            self.totalSourceTime.seconds > 0 {
+                            totalSourceTime.seconds > 0 {
                                 let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
                                 if pts.isValid {
                                     let relativePts = CMTimeSubtract(pts, trimOffsetTime)
-                                    let progress = Float(CMTimeGetSeconds(relativePts) / CMTimeGetSeconds(self.totalSourceTime))
+                                    let progress = Float(CMTimeGetSeconds(relativePts) / CMTimeGetSeconds(totalSourceTime))
                                     
                                     if progress >= lastProgressUpdate + 0.01 || (progress >= 1.0 && lastProgressUpdate < 1.0) {
                                         DispatchQueue.main.async { handler(min(max(progress, 0.0), 1.0)) }
@@ -487,20 +545,29 @@ public class JMVideoCompressor {
                                 }
                             }
 
-                            // 샘플 추가
+                            // Append sample - check writer status first
+                            guard let writer = self.assetWriter, writer.status == .writing else {
+                                CMSampleBufferInvalidate(sampleBuffer)
+                                assetWriterInput.markAsFinished()
+                                safeResume(throwing: JMVideoCompressorError.cancelled)
+                                return
+                            }
+                            
                             if !assetWriterInput.append(sampleBuffer) {
-                                let writerError = self.assetWriter?.error
-                                print("Error: Failed to append \(assetWriterInput.mediaType) buffer. Writer status: \(self.assetWriter?.status.rawValue ?? -1). Error: \(writerError?.localizedDescription ?? "unknown")")
+                                let writerError = writer.error
+                                print("Error: Failed to append \(assetWriterInput.mediaType) buffer. Writer status: \(writer.status.rawValue). Error: \(writerError?.localizedDescription ?? "unknown")")
                                 safeResume(throwing: JMVideoCompressorError.compressionFailed(writerError ?? NSError(domain: "JMVideoCompressor", code: -6, userInfo: [NSLocalizedDescriptionKey: "Failed to append sample buffer."])))
                                 return
                             }
                         }
                     }
-                    // isReadyForMoreMediaData가 false가 되면 루프를 종료하고 다음 콜백을 기다림
                 } catch {
                     safeResume(throwing: error)
                 }
             }
+            
+            // Request media data with the processing block
+            assetWriterInput.requestMediaDataWhenReady(on: isolationQueue, using: processingBlock)
         }
     }
 
@@ -810,7 +877,7 @@ public class JMVideoCompressor {
         }
 
         let compressedAudioBitrate = (targetAudioSettings?[AVEncoderBitRateKey] as? NSNumber)?.floatValue
-        let processingTime = Date().timeIntervalSince(self.isolationQueue.sync { self.startTime ?? Date() })
+        let processingTime = Date().timeIntervalSince(self.stateQueue.sync { self.startTime ?? Date() })
 
         let isRotated = abs(sourceVideoSettings.transform.b) == 1.0 && abs(sourceVideoSettings.transform.c) == 1.0
         let visualOriginalSize = isRotated ? CGSize(width: sourceVideoSettings.size.height, height: sourceVideoSettings.size.width) : sourceVideoSettings.size
